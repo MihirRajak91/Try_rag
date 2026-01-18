@@ -15,14 +15,17 @@ PROMPT_ACTION_EVENTS_BUILTIN_FILTERING = {
 
     "doc_type": "RULE",
     "topic": "actions_builtin_filtering",
-    "priority": 90,
+    "priority": 120,
     "role": "router",
-    "data":  """
+"data": """
 ROUTER.RULE.actions_builtin_filtering
-Intent: database record CRUD action (create/update/delete/duplicate/restore) on a window/entity record.
-Output: choose EVNT_RCRD_ADD / EVNT_RCRD_UPDT / EVNT_RCRD_DEL / EVNT_RCRD_DUP / EVNT_RCRD_REST (direct action; record selection handled inside event).
-Scope: record operations only.
+Intent: record MUTATION (state-changing action) on an entity/table record.
+Includes: delete, update, create, duplicate, restore. (write operations)
+Output: choose EVNT_RCRD_DEL / EVNT_RCRD_UPDT / EVNT_RCRD_ADD / EVNT_RCRD_DUP / EVNT_RCRD_REST.
+Key: WHERE-style criteria belongs INSIDE the action event (selection is part of the mutation step).
+Contrast: not listing/retrieving records (read-only). Not EVNT_RCRD_INFO/EVNT_FLTR.
 """,
+
 
     "text": """SIMPLE WHERE FILTER RULE (NO CONDITIONS):
 - If the query uses "where/when" only to identify which records to act on (e.g., "where status is active"),
@@ -1102,12 +1105,20 @@ If no branching is required, OMIT the Conditions section entirely.
 }
 
 PROMPT_DATA_RETRIEVAL_ROUTER = {
-    "doc_type": "RULE",
-    "topic": "data_retrieval_filtering",
-    "priority": 85,
-    "role": "router",
-    "data": "ROUTER.RULE.data_retrieval_filtering",
-    "text": """
+  "doc_type": "RULE",
+  "topic": "data_retrieval_filtering",
+  "priority": 105,   # bump priority above 98 and 100, because it's a core router
+  "role": "router",
+"data": """
+ROUTER.RULE.data_retrieval_filtering
+Intent: READ-ONLY retrieval of records from an entity/table (list/show/get/search).
+Output: EVNT_RCRD_INFO for retrieval, EVNT_FLTR for WHERE-style filtering, EVNT_JMES for field projection.
+Key: does NOT change data (no delete/update/create/duplicate/restore).
+Contrast: not record mutation events (EVNT_RCRD_DEL/UPDT/ADD/DUP/REST).
+""",
+
+
+  "text": """
 Use when the user wants to retrieve/list/search records and/or apply WHERE-style filtering,
 or extract specific fields from records.
 Do not use for create/update/delete actions.
@@ -1117,9 +1128,16 @@ Do not use for create/update/delete actions.
 PROMPT_DATA_RETRIEVAL_SUPPORT = {
     "doc_type": "RULE",
     "topic": "data_retrieval_filtering",
-    "priority": 85,
+    "priority": 110,
     "role": "support",
-    "data": "SUPPORT.RULE.data_retrieval_filtering",
+"data": """ROUTER.RULE.data_retrieval_filtering
+Intent: retrieve/list/search records from an entity/table (dynamic records) and apply WHERE-style filters.
+Strong signals: get records, list records, show records, retrieve records, find records, search records,
+"from <entity>", "where <field> ...".
+Output: EVNT_RCRD_INFO (retrieve) + EVNT_FLTR (where filtering) + optional EVNT_JMES (field projection).
+Do NOT use for create/update/delete/duplicate/restore.
+"""
+,
     "text": """
 DATA RETRIEVAL & FILTERING RULES
 
@@ -1142,7 +1160,7 @@ Only use CNDN_* when the workflow branches into different actions (if/else).
 PROMPT_USER_MGMT_ROUTER = {
     "doc_type": "RULE",
     "topic": "user_mgmt",
-    "priority": 100,
+    "priority": 140,
     "role": "router",
 "data": """ROUTER.RULE.user_mgmt
 STOP-EARLY.
@@ -1205,17 +1223,16 @@ USER MANAGEMENT EXAMPLES:
 }
 
 PROMPT_STATIC_VS_DYNAMIC_ROUTER = {
-    "doc_type": "RULE",
-    "topic": "static_vs_dynamic",
-    "priority": 98,
-    "role": "router",
-"data": """ROUTER.RULE.static_vs_dynamic
-STOP-EARLY (after user_mgmt).
-Intent: static system tables/catalogs (roles, departments).
-Strong signals: list roles, get all roles, show roles, role catalog; list departments, get departments.
-Use static record events *_STC for CRUD/retrieve on roles/departments.
-Do NOT match: actions on users (add/update/deactivate/assign role to user).
+  "doc_type": "RULE",
+  "topic": "static_vs_dynamic",
+  "priority": 130,
+  "role": "router",
+  "data": """ROUTER.RULE.static_vs_dynamic
+Static catalogs ONLY: roles, departments.
+Use ONLY when query explicitly mentions: role/roles or department/departments.
+Not for general tables/entities (e.g., Enrollment Tracking) and not for "get records" queries.
 """
+
 ,
     "text": """STEP 0: STATIC vs DYNAMIC RECORD CLASSIFICATION (HIGHEST PRIORITY - CHECK FIRST)
 
@@ -1260,6 +1277,9 @@ Route to user_mgmt ONLY when query is explicitly about a user action/target:
 - assign role to a user
 - grant/revoke permissions for a user
 - extend responsibility of a user
+
+Scope: ONLY resolve user_mgmt vs static_vs_dynamic for role/department catalog queries.
+Do NOT apply to generic "get records from <entity>" queries.
 """
 
 ,
