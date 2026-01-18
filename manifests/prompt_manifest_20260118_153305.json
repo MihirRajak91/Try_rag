@@ -1,0 +1,79 @@
+{
+  "query": "If a student’s status is approved, send an email notification to the admin, otherwise send a reminder notification.",
+  "routing": {
+    "winner": "notifications_intent",
+    "topics": [
+      "notifications_intent",
+      "data_retrieval_filtering"
+    ],
+    "secondary": [
+      "data_retrieval_filtering"
+    ]
+  },
+  "audit": {
+    "prompt_chars": 1969,
+    "approx_tokens": 492,
+    "chunks_count": 5,
+    "by_role": {
+      "router": 2,
+      "support": 3
+    },
+    "by_doc_type": {
+      "RULE": 5
+    },
+    "by_topic": {
+      "data_retrieval_filtering": 2,
+      "notifications_intent": 2,
+      "planner_policy": 1
+    },
+    "chunk_fingerprints": [
+      "dedd3c3265ac7d3f0c6958ba9cd9b09b9a169d02",
+      "f02642f11d646d4177bee736e759fc14df7912b7",
+      "036b7fbe404f0c4c5e3129e293bd2decf6c38044",
+      "e06b3566a8d49eb8130560bff89a7ae7e2ef4b74",
+      "2b2c6d696788a8326113c736dc322bf41e0b4318"
+    ]
+  },
+  "chunks": [
+    {
+      "doc_type": "RULE",
+      "topic": "data_retrieval_filtering",
+      "role": "router",
+      "priority": 105,
+      "source": "clean",
+      "fingerprint": "dedd3c3265ac7d3f0c6958ba9cd9b09b9a169d02"
+    },
+    {
+      "doc_type": "RULE",
+      "topic": "notifications_intent",
+      "role": "router",
+      "priority": 95,
+      "source": "clean",
+      "fingerprint": "f02642f11d646d4177bee736e759fc14df7912b7"
+    },
+    {
+      "doc_type": "RULE",
+      "topic": "data_retrieval_filtering",
+      "role": "support",
+      "priority": 110,
+      "source": "clean",
+      "fingerprint": "036b7fbe404f0c4c5e3129e293bd2decf6c38044"
+    },
+    {
+      "doc_type": "RULE",
+      "topic": "notifications_intent",
+      "role": "support",
+      "priority": 95,
+      "source": "clean",
+      "fingerprint": "e06b3566a8d49eb8130560bff89a7ae7e2ef4b74"
+    },
+    {
+      "doc_type": "RULE",
+      "topic": "planner_policy",
+      "role": "support",
+      "priority": 80,
+      "source": "clean",
+      "fingerprint": "2b2c6d696788a8326113c736dc322bf41e0b4318"
+    }
+  ]
+}

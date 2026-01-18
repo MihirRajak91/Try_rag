@@ -1,0 +1,79 @@
+{
+  "query": "If a student’s status is approved, send an email notification to the admin, otherwise send a reminder notification.",
+  "routing": {
+    "winner": "notifications_intent",
+    "topics": [
+      "notifications_intent",
+      "conditions"
+    ],
+    "secondary": [
+      "conditions"
+    ]
+  },
+  "audit": {
+    "prompt_chars": 10918,
+    "approx_tokens": 2729,
+    "chunks_count": 5,
+    "by_role": {
+      "router": 2,
+      "support": 3
+    },
+    "by_doc_type": {
+      "RULE": 5
+    },
+    "by_topic": {
+      "conditions": 2,
+      "notifications_intent": 2,
+      "planner_policy": 1
+    },
+    "chunk_fingerprints": [
+      "51c9bcd8f33d411c4e486dd2258b2cfc54676943",
+      "f02642f11d646d4177bee736e759fc14df7912b7",
+      "3f28c1e0eda99a5013f643491047ee1feab46a8d",
+      "e06b3566a8d49eb8130560bff89a7ae7e2ef4b74",
+      "2b2c6d696788a8326113c736dc322bf41e0b4318"
+    ]
+  },
+  "chunks": [
+    {
+      "doc_type": "RULE",
+      "topic": "conditions",
+      "role": "router",
+      "priority": 100,
+      "source": "clean",
+      "fingerprint": "51c9bcd8f33d411c4e486dd2258b2cfc54676943"
+    },
+    {
+      "doc_type": "RULE",
+      "topic": "notifications_intent",
+      "role": "router",
+      "priority": 95,
+      "source": "clean",
+      "fingerprint": "f02642f11d646d4177bee736e759fc14df7912b7"
+    },
+    {
+      "doc_type": "RULE",
+      "topic": "conditions",
+      "role": "support",
+      "priority": 100,
+      "source": "clean",
+      "fingerprint": "3f28c1e0eda99a5013f643491047ee1feab46a8d"
+    },
+    {
+      "doc_type": "RULE",
+      "topic": "notifications_intent",
+      "role": "support",
+      "priority": 95,
+      "source": "clean",
+      "fingerprint": "e06b3566a8d49eb8130560bff89a7ae7e2ef4b74"
+    },
+    {
+      "doc_type": "RULE",
+      "topic": "planner_policy",
+      "role": "support",
+      "priority": 80,
+      "source": "clean",
+      "fingerprint": "2b2c6d696788a8326113c736dc322bf41e0b4318"
+    }
+  ]
+}

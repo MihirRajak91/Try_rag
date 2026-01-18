@@ -17,15 +17,12 @@ PROMPT_ACTION_EVENTS_BUILTIN_FILTERING = {
     "topic": "actions_builtin_filtering",
     "priority": 120,
     "role": "router",
-"data": """
+    "data":  """
 ROUTER.RULE.actions_builtin_filtering
-Intent: record MUTATION (state-changing action) on an entity/table record.
-Includes: delete, update, create, duplicate, restore. (write operations)
-Output: choose EVNT_RCRD_DEL / EVNT_RCRD_UPDT / EVNT_RCRD_ADD / EVNT_RCRD_DUP / EVNT_RCRD_REST.
-Key: WHERE-style criteria belongs INSIDE the action event (selection is part of the mutation step).
-Contrast: not listing/retrieving records (read-only). Not EVNT_RCRD_INFO/EVNT_FLTR.
+Intent: database record CRUD action (create/update/delete/duplicate/restore) on a window/entity record.
+Output: choose EVNT_RCRD_ADD / EVNT_RCRD_UPDT / EVNT_RCRD_DEL / EVNT_RCRD_DUP / EVNT_RCRD_REST (direct action; record selection handled inside event).
+Scope: record operations only.
 """,
-
 
     "text": """SIMPLE WHERE FILTER RULE (NO CONDITIONS):
 - If the query uses "where/when" only to identify which records to act on (e.g., "where status is active"),
@@ -1109,14 +1106,11 @@ PROMPT_DATA_RETRIEVAL_ROUTER = {
   "topic": "data_retrieval_filtering",
   "priority": 105,   # bump priority above 98 and 100, because it's a core router
   "role": "router",
-"data": """
-ROUTER.RULE.data_retrieval_filtering
-Intent: READ-ONLY retrieval of records from an entity/table (list/show/get/search).
-Output: EVNT_RCRD_INFO for retrieval, EVNT_FLTR for WHERE-style filtering, EVNT_JMES for field projection.
-Key: does NOT change data (no delete/update/create/duplicate/restore).
-Contrast: not record mutation events (EVNT_RCRD_DEL/UPDT/ADD/DUP/REST).
+  "data": """ROUTER.RULE.data_retrieval_filtering
+Get/List/Show/Retrieve records from an entity/table.
+Examples: "get records from Enrollment Tracking", "list records", "show all records".
+Supports WHERE filters: "where status is enrolled", "where amount > 100".
 """,
-
 
   "text": """
 Use when the user wants to retrieve/list/search records and/or apply WHERE-style filtering,

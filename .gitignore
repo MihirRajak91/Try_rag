@@ -8,7 +8,12 @@ wheels/
 
 # Virtual environments
 .venv
-tests
+
 .chroma
 try_rag.egg-info
 .env
+chroma_store
+chroma_store/*
+.ocontext
+tests
+
