@@ -43,3 +43,5 @@ if __name__ == "__main__":
 
     print("\n=== LLM OUTPUT ===\n")
     print(result["llm_output"])
+
+    #uv run python -m scripts.planner_tool_cli
