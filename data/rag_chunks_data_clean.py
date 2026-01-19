@@ -22,63 +22,37 @@ ROUTER.RULE.actions_builtin_filtering
 Intent: database record CRUD action (create/update/delete/duplicate/restore) on a window/entity record.
 Output: choose EVNT_RCRD_ADD / EVNT_RCRD_UPDT / EVNT_RCRD_DEL / EVNT_RCRD_DUP / EVNT_RCRD_REST (direct action; record selection handled inside event).
 Scope: record operations only.
+Common natural language patterns for record actions (entity/window may be named without the word "record"):
+
+- "create in <entity/window> ..."
+- "add entry in <entity/window> ..."
+- "insert into <entity/window> ..."
+
+- "update <entity/window> ..."
+- "modify <entity/window> ..."
+- "set fields in <entity/window> where ..."
+
+- "delete from <entity/window> where ..."
+- "remove entries from <entity/window> ..."
+- "purge <entity/window> records ..."
+
+These patterns indicate direct record CRUD intent even when the word "record" is not explicitly mentioned.
+
+Common creation phrasing without the word "record":
+- "create in <entity/window> with <values>"
+- "add in <entity/window> with <values>"
+- "insert into <entity/window> with <values>"
+
+Randomization intent for create:
+- "with random values", "random suitable values", "auto-generate values" => EVNT_RCRD_ADD + generate appropriate fields
+
+
 """,
 
     "text": """SIMPLE WHERE FILTER RULE (NO CONDITIONS):
 - If the query uses "where/when" only to identify which records to act on (e.g., "where status is active"),
   treat it as built-in filtering and DO NOT add any CNDN_*.
 - Only use CNDN_* when the query requires branching decisions (if/else) or multiple logical paths.
-
-    CRITICAL: Action Events with Built-in Filtering
-
-Use Direct Action Events (NO additional retrieve/filter needed) for:
-
-EVNT_RCRD_ADD (Create a Record):
-- Keywords: "create a record", "add a record", "create record of [entity]"
-- Pattern: "create [a] record of [entity] where [conditions]"
-- Use CNDN_* only when the query has explicit branching logic (if/else) or cascading checks.
-Do NOT use CNDN_* for simple where filters.
-- Examples:
-  - "create a record in enrollment tracking where fee charged is 2500 to fee charged 3000" → CNDN_BIN + EVNT_RCRD_ADD (binary condition evaluates the complex fee logic)
-
-EVNT_RCRD_DUP (Duplicate a Record):
-- Keywords: "duplicate the record", "duplicate record of [entity]"
-- Pattern: "duplicate [the] record of [entity] where [conditions]"
-- Has BUILT-IN filtering - directly duplicates matching record
-- Examples:
-  - "duplicate the record of Enrollment Tracking where Title is Enrollment 1 and status is enrolled" → EVNT_RCRD_DUP ONLY
-  - "duplicate a record when value is greater than 100" → EVNT_RCRD_DUP ONLY (built-in condition handling)
-
-EVNT_RCRD_REST (Restore a Record):
-- Keywords: "restore the record", "restore record of [entity]"
-- Pattern: "restore [the] record of [entity] where [conditions]"
-- Has BUILT-IN filtering - directly restores matching record
-- Examples:
-  - "restore the record of Enrollment Tracking where Title is Enrollment 1 and status is enrolled" → EVNT_RCRD_REST ONLY
-
-EVNT_RCRD_DEL (Delete a Record):
-- Keywords: "delete the record", "delete record of [entity]", "remove the record"
-- Pattern: "delete [the] record of [entity] where [conditions]"
-- Has BUILT-IN filtering - directly deletes matching record
-- Examples:
-  - "delete the record of Enrollment Tracking where Title is Enrollment 1 and status is enrolled" → EVNT_RCRD_DEL ONLY
-  - "delete a record when status is expired" → EVNT_RCRD_DEL ONLY
-
-EVNT_RCRD_UPDT (Update a Record):
-- Keywords: "update the record", "update record of [entity]", "modify the record"
-- Pattern: "update [the] record of [entity]"
-- For update operations with conditions, use CNDN_BIN + EVNT_RCRD_UPDT
-- Examples:
-  - "update a record in enrollment tracking where fee charged is 2500 to fee charged 3000" → CNDN_BIN + EVNT_RCRD_UPDT (binary condition evaluates "where fee charged is 2500")
-
-⚠️ CRITICAL RULE:
-- DO NOT combine these action events with EVNT_RCRD_INFO, EVNT_FLTR, or CNDN_BIN (except for complex create operations)
-- Each action event handles its own record selection and filtering internally
-- Use ONLY the action event when the query is a direct action on records
-- CREATE operations with complex conditions may need CNDN_BIN, CNDN_SEQ, CNDN_DOM for condition evaluation
-
-CRITICAL ACTION DETECTION RULE:
-If a query starts with "create" or contains "create a record", it is ALWAYS a CREATE operation (EVNT_RCRD_ADD), never an UPDATE operation, regardless of other words like "to" in the query.
 """
 }
 
@@ -954,6 +928,51 @@ LOOP TYPE IDENTIFICATION:
 """
 }
 
+PROMPT_OUTPUT_CONTRACT = {
+    "doc_type": "RULE",
+    "topic": "output_contract",
+    "priority": 90,      # below triggers_rules, above planner_policy
+    "role": "support",
+    "data": """
+SUPPORT.RULE.output_contract
+Intent: enforce the exact Markdown section template of the workflow plan.
+Output: a strict output skeleton the model must follow.
+""",
+    "text": """
+OUTPUT CONTRACT (STRUCTURED WORKFLOW PLAN TEMPLATE)
+
+Your output MUST be a Markdown Structured Workflow Plan (NOT JSON) using only the sections required.
+
+Use this template (omit sections that are not needed):
+
+## Trigger
+- <TRG_*>
+
+## Start
+- <brief start>
+
+## Steps
+1. <EVNT_* ...>
+2. <EVNT_* ...>
+
+## Conditions (ONLY if branching is required)
+### CNDN_BIN
+- IF TRUE:
+  ↳ <EVNT_* ...>
+- IF FALSE:
+  ↳ <EVNT_* ...>
+
+## Loops (ONLY if repetition is required)
+- <FOR/WHILE/DO-WHILE ...>
+  INSIDE LOOP:
+  ↳ <EVNT_* ...>
+
+## End
+- End
+"""
+}
+
+
 PROMPT_TRIGGERS_CATALOG = {
 
     "doc_type": "CATALOG",
@@ -1013,91 +1032,31 @@ Output: formatting policy only (not event selection).
 
 }
 
-PROMPT_CONDITIONS_SUPPORT = {
+PROMPT_TRIGGERS_RULES = {
     "doc_type": "RULE",
-    "topic": "conditions",
-    "priority": 100,
+    "topic": "triggers_rules",
+    "priority": 95,   # higher than triggers_catalog(40) and planner_policy(80)
     "role": "support",
     "data": """
-SUPPORT.RULE.conditions
-Intent: define when and how to use workflow conditions (CNDN_*).
-Scope: conditional branching logic only (not formatting, not routing).
+SUPPORT.RULE.triggers_rules
+Intent: choose trigger type deterministically; default TRG_DB if none explicitly specified.
+Output: trigger selection rules (not the trigger catalog list).
 """,
     "text": """
-CONDITIONS LIST WITH DESCRIPTIONS
+TRIGGER SELECTION RULES (DEFAULT + DECISION TREE)
 
-Include conditions ONLY if the workflow requires separate logical checks beyond inherent event logic.
-Do NOT include conditions for simple filters handled by events themselves.
+- Default: If the user does NOT explicitly mention API/file/schedule/button/webhook/auth/approval/field-entry/timeout,
+  use TRG_DB.
 
-Examples that REQUIRE conditions:
-- Field value comparisons with branching: if quantity > 100 then X else Y
-- Boolean logic with branching: AND, OR, NOT
-- Range checks with branching: if 10 <= age <= 50 then X else Y
-
-Examples that DO NOT require conditions:
-- Data filters (handled by EVNT_FLTR / EVNT_JMES)
-- Built-in action filters (delete when, update when)
-- Sequential actions without branching
-
-NEVER include CRUD actions (add_record, mod_record, delete_record, etc.) inside condition blocks.
-
----
-
-CNDN_BIN — Binary Condition  
-Use when there is a single IF–THEN decision with two possible outcomes.
-
-Rules:
-- ALWAYS show both TRUE and FALSE branches
-- If no explicit ELSE is given, route FALSE to END
-
-Example:
-IF status == approved → Send Email  
-ELSE → Send Notification
-
----
-
-CNDN_SEQ — Sequential / Parallel Condition  
-Use when there are MULTIPLE independent conditions evaluated separately.
-
-Rules:
-- Each condition must have its own logic block (CNDN_LGC)
-- Conditions are evaluated independently (not cascading)
-
-Example:
-- Check risk == High → Send Alert  
-- Check type == Permit → Assign Team
-
----
-
-CNDN_DOM — Domino / Cascading Condition  
-Use when conditions are evaluated one after another, where failure leads to the next check.
-
-Rules:
-- ELSE of one condition routes to the next condition container
-- Stop evaluation once a condition matches
-
-Example:
-- First check user exists  
-- ELSE check permissions  
-- ELSE check quota
-
----
-
-CNDN_LGC  
-Logic block used inside CNDN_SEQ for independent condition checks.
-
-CNDN_LGC_DOM  
-Logic block used inside CNDN_DOM for cascading condition checks.
-
----
-
-CRITICAL EXCLUSIONS — DO NOT USE CONDITIONS FOR:
-- Simple data retrieval with WHERE clauses
-- Record actions with built-in filters
-- Single actions with no branching
-- Sequential actions without IF/ELSE logic
-
-If no branching is required, OMIT the Conditions section entirely.
+- Use TRG_API only when the query explicitly mentions API call/request/endpoint/integration.
+- Use TRG_FILE only when the query explicitly mentions file upload/import/export/CSV/Excel.
+- Use TRG_SCH only when the query explicitly mentions time/schedule/daily/weekly/cron.
+- Use TRG_BTN only when the query explicitly mentions clicking a button / UI action.
+- Use TRG_WBH only when the query explicitly mentions an incoming webhook.
+- Use TRG_AUTH only for login/logout/password reset/change.
+- Use TRG_APRVL only for approval events.
+- Use TRG_FLD only for UI field entry/update events.
+- Use TRG_OUT only for timeouts/expiry.
 """
 }
 
@@ -1110,6 +1069,11 @@ PROMPT_DATA_RETRIEVAL_ROUTER = {
 Get/List/Show/Retrieve records from an entity/table.
 Examples: "get records from Enrollment Tracking", "list records", "show all records".
 Supports WHERE filters: "where status is enrolled", "where amount > 100".
+Hard exclusions:
+- If the user intent is to create/update/delete/duplicate/restore records, this is NOT data retrieval.
+- Phrases like "create in <entity>", "add in <entity>", "insert into <entity>" indicate record creation (actions_builtin_filtering).
+- "random suitable values" implies generating values for a create action, not retrieval.
+
 """,
 
   "text": """
@@ -1342,10 +1306,12 @@ LAYER7_LOOPS = [
 
 LAYER8_TRIGGER_CATALOG = [
     PROMPT_TRIGGERS_CATALOG,
+    PROMPT_TRIGGERS_RULES,
 ]
 
 LAYER9_PLANNER_POLICY = [
     PROMPT_PLANNER_POLICY,
+    PROMPT_OUTPUT_CONTRACT,
 ]
 
 # Flat list used by embedding + retrieval.

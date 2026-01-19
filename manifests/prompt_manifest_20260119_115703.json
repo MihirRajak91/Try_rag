@@ -1,0 +1,104 @@
+{
+  "schema_version": 1,
+  "build_info": {
+    "collection": "rag_chunks_v1",
+    "embed_model": "text-embedding-3-small",
+    "chroma_dir": "chroma_store"
+  },
+  "query": "Send a system notification to Suyash Dhakal.",
+  "routing": {
+    "winner": "notifications_intent",
+    "topics": [
+      "notifications_intent"
+    ],
+    "secondary": []
+  },
+  "audit": {
+    "prompt_chars": 3889,
+    "approx_tokens": 972,
+    "chunks_count": 7,
+    "by_role": {
+      "router": 2,
+      "support": 5
+    },
+    "by_doc_type": {
+      "RULE": 6,
+      "CATALOG": 1
+    },
+    "by_topic": {
+      "router_disambiguation": 1,
+      "triggers_rules": 1,
+      "output_contract": 1,
+      "planner_policy": 1,
+      "triggers_catalog": 1,
+      "notifications_intent": 2
+    },
+    "chunk_fingerprints": [
+      "d4a92a25ff560e6940ec9ffc50c5e7a4a77ed5c7",
+      "8886d17a996762db4e54ea750b63bc52667f49b5",
+      "d26b6743910116b8a105ecc4018cd9472aeeb574",
+      "2b2c6d696788a8326113c736dc322bf41e0b4318",
+      "70e1247612acad2dd5f06d9484fbed3551fab176",
+      "f02642f11d646d4177bee736e759fc14df7912b7",
+      "e06b3566a8d49eb8130560bff89a7ae7e2ef4b74"
+    ]
+  },
+  "chunks": [
+    {
+      "doc_type": "RULE",
+      "topic": "router_disambiguation",
+      "role": "router",
+      "priority": 130,
+      "source": "clean",
+      "fingerprint": "d4a92a25ff560e6940ec9ffc50c5e7a4a77ed5c7"
+    },
+    {
+      "doc_type": "RULE",
+      "topic": "triggers_rules",
+      "role": "support",
+      "priority": 95,
+      "source": "clean",
+      "fingerprint": "8886d17a996762db4e54ea750b63bc52667f49b5"
+    },
+    {
+      "doc_type": "RULE",
+      "topic": "output_contract",
+      "role": "support",
+      "priority": 90,
+      "source": "clean",
+      "fingerprint": "d26b6743910116b8a105ecc4018cd9472aeeb574"
+    },
+    {
+      "doc_type": "RULE",
+      "topic": "planner_policy",
+      "role": "support",
+      "priority": 80,
+      "source": "clean",
+      "fingerprint": "2b2c6d696788a8326113c736dc322bf41e0b4318"
+    },
+    {
+      "doc_type": "CATALOG",
+      "topic": "triggers_catalog",
+      "role": "support",
+      "priority": 40,
+      "source": "clean",
+      "fingerprint": "70e1247612acad2dd5f06d9484fbed3551fab176"
+    },
+    {
+      "doc_type": "RULE",
+      "topic": "notifications_intent",
+      "role": "router",
+      "priority": 95,
+      "source": "clean",
+      "fingerprint": "f02642f11d646d4177bee736e759fc14df7912b7"
+    },
+    {
+      "doc_type": "RULE",
+      "topic": "notifications_intent",
+      "role": "support",
+      "priority": 95,
+      "source": "clean",
+      "fingerprint": "e06b3566a8d49eb8130560bff89a7ae7e2ef4b74"
+    }
+  ]
+}

@@ -35,6 +35,11 @@ MAX_ALLOWED_TOPICS = int(os.getenv("MAX_ALLOWED_TOPICS", "2"))
 STOP_EARLY_TOPICS = ["user_mgmt", "static_vs_dynamic"]
 DISALLOWED_OUTPUT_TOPICS = {"router_disambiguation"}
 
+# Secondary should be included ONLY when the query is truly ambiguous
+SECONDARY_AMBIGUITY_ABS_MAX = float(os.getenv("SECONDARY_AMBIGUITY_ABS_MAX", "0.08"))
+SECONDARY_AMBIGUITY_REL_MAX = float(os.getenv("SECONDARY_AMBIGUITY_REL_MAX", "1.10"))
+
+
 CENTROIDS_PATH = os.path.join(CHROMA_DIR, "topic_centroids.json")
 
 # -------------------------------------------------------------------
@@ -297,25 +302,32 @@ def route_topics(query: str, debug: bool = True) -> List[str]:
             allowed_topics: List[str] = [winner["topic"]]
 
             # -------------------------------------------------------------------
-            # Secondary selection (centroid-only) with pair preference re-ordering
+            # Secondary selection (centroid-only) with ambiguity gate + pair preference
             # -------------------------------------------------------------------
             if winner["topic"] not in STOP_EARLY_TOPICS and MAX_ALLOWED_TOPICS > 1:
-                preferred = PAIR_PREFERENCES.get(winner["topic"], set())
-
                 # filter out stop-early candidates
                 candidates = [s for s in scored[1:] if s["topic"] not in STOP_EARLY_TOPICS]
+                if candidates:
+                    # Ambiguity gate: only consider secondary if runner-up is very close
+                    runner_up = candidates[0]
+                    abs_gap_amb = runner_up["centroid_dist"] - winner["centroid_dist"]
+                    rel_gap_amb = runner_up["centroid_dist"] / max(winner["centroid_dist"], 1e-9)
 
-                # reorder: preferred topics first, then the rest (stable)
-                preferred_candidates = [s for s in candidates if s["topic"] in preferred]
-                other_candidates = [s for s in candidates if s["topic"] not in preferred]
-                ordered = preferred_candidates + other_candidates
+                    if abs_gap_amb <= SECONDARY_AMBIGUITY_ABS_MAX and rel_gap_amb <= SECONDARY_AMBIGUITY_REL_MAX:
+                        preferred = PAIR_PREFERENCES.get(winner["topic"], set())
 
-                for s in ordered:
-                    abs_gap = s["centroid_dist"] - winner["centroid_dist"]
-                    rel_gap = s["centroid_dist"] / max(winner["centroid_dist"], 1e-9)
-                    if abs_gap <= ROUTER_MAX_ABS_GAP and rel_gap <= ROUTER_MAX_REL_GAP:
-                        allowed_topics.append(s["topic"])
-                        break
+                        # reorder: preferred topics first, then the rest (stable)
+                        preferred_candidates = [s for s in candidates if s["topic"] in preferred]
+                        other_candidates = [s for s in candidates if s["topic"] not in preferred]
+                        ordered = preferred_candidates + other_candidates
+
+                        for s in ordered:
+                            abs_gap = s["centroid_dist"] - winner["centroid_dist"]
+                            rel_gap = s["centroid_dist"] / max(winner["centroid_dist"], 1e-9)
+                            if abs_gap <= ROUTER_MAX_ABS_GAP and rel_gap <= ROUTER_MAX_REL_GAP:
+                                allowed_topics.append(s["topic"])
+                                break
+
 
             allowed_topics = [t for t in allowed_topics if t and t not in DISALLOWED_OUTPUT_TOPICS]
             allowed_topics = allowed_topics[:MAX_ALLOWED_TOPICS]

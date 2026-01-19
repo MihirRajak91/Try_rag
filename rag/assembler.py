@@ -20,6 +20,20 @@ MAX_SUPPORT_BLOCKS = int(os.getenv("MAX_SUPPORT_BLOCKS", "12"))
 MAX_CATALOG_BLOCKS = int(os.getenv("MAX_CATALOG_BLOCKS", "6"))
 MANIFEST_SCHEMA_VERSION = 1
 
+# ----------------------------
+# Always-injected policy blocks
+# ----------------------------
+ALWAYS_TOPIC_HINTS = {
+    # Adjust if your actual topic strings differ
+    "router_disambiguation",
+    "router_disambig",
+    "disambiguation",
+    "triggers_catalog",
+    "trigger_catalog",
+    "planner_policy",
+    "triggers_rules",
+    "output_contract"
+}
 
 class PromptTooLargeError(RuntimeError):
     pass
@@ -44,13 +58,65 @@ def _dedupe_by_text(chunks: List[Dict]) -> List[Dict]:
     seen = set()
     out = []
     for ch in chunks:
-        txt = ch["text"].strip()
+        txt = _norm_text(ch.get("text", ""))
         h = hashlib.sha1(txt.encode("utf-8")).hexdigest()
         if h in seen:
             continue
         seen.add(h)
         out.append(ch)
     return out
+
+
+def _norm_text(s: str) -> str:
+    # normalize whitespace so substring checks are reliable
+    return " ".join((s or "").strip().split())
+
+def _drop_contained_blocks(chunks: List[Dict]) -> List[Dict]:
+    """
+    If chunk B's normalized text is fully contained within chunk A's normalized text,
+    drop B (keep the more informative chunk).
+    """
+    normed = [(_norm_text(ch.get("text", "")), ch) for ch in chunks]
+    out = []
+    for i, (ti, chi) in enumerate(normed):
+        if not ti:
+            continue
+        contained = False
+        for j, (tj, _) in enumerate(normed):
+            if i == j:
+                continue
+            if len(tj) >= len(ti) and ti in tj:
+                contained = True
+                break
+        if not contained:
+            out.append(chi)
+    return out
+
+
+
+def _is_always_block(ch: Dict) -> bool:
+    t = str(ch.get("topic", "")).lower().strip()
+    txt = str(ch.get("text", "")).lower()
+
+    # 1) Prefer topic matches (fast + clean)
+    if t in ALWAYS_TOPIC_HINTS:
+        return True
+
+    # 2) Fallback: match by distinctive headings/phrases in text
+    # (works even if topic names differ)
+    if "trigger" in txt and "catalog" in txt:
+        return True
+    if "planner output policy" in txt:
+        return True
+    if "disambiguation" in txt and "router" in txt:
+        return True
+
+    return False
+
+
+def _select_always_blocks(all_chunks: List[Dict]) -> List[Dict]:
+    blocks = [ch for ch in all_chunks if _is_always_block(ch)]
+    return _dedupe_by_text(_sort_by_priority_desc(blocks))
 
 
 def _expand_support_contract(topics: List[str]) -> ExpansionResult:
@@ -113,6 +179,10 @@ def assemble_prompt(
     ]
     core_blocks = _sort_by_priority_desc(core_blocks)
 
+    # 1b) ALWAYS policy blocks (must be present like original planner)
+    always_blocks = _select_always_blocks(ALL_CHUNKS)
+
+
     # 2) Router contract
     routing: RoutingResult = route(user_query, debug=debug)
     topics = list(routing.topics)
@@ -124,16 +194,43 @@ def assemble_prompt(
     support_blocks = _dedupe_by_text(_sort_by_priority_desc(exp.support_blocks))
     catalog_blocks = _dedupe_by_text(_sort_by_priority_desc(exp.catalogs))
 
-    # cross-dedupe: don't include support/catalog blocks that repeat router blocks
-    router_hashes = {hashlib.sha1(ch["text"].strip().encode("utf-8")).hexdigest() for ch in router_blocks}
+    # Drop blocks that are contained inside other blocks (prevents partial duplicates)
+    router_blocks = _drop_contained_blocks(router_blocks)
+    support_blocks = _drop_contained_blocks(support_blocks)
+    catalog_blocks = _drop_contained_blocks(catalog_blocks)
+
+    # Cross-drop: if a support/catalog block is contained within any router block, drop it
+    router_texts = [_norm_text(ch.get("text", "")) for ch in router_blocks]
     support_blocks = [
         ch for ch in support_blocks
-        if hashlib.sha1(ch["text"].strip().encode("utf-8")).hexdigest() not in router_hashes
+        if not any(_norm_text(ch.get("text", "")) in rt for rt in router_texts if rt)
     ]
     catalog_blocks = [
         ch for ch in catalog_blocks
-        if hashlib.sha1(ch["text"].strip().encode("utf-8")).hexdigest() not in router_hashes
+        if not any(_norm_text(ch.get("text", "")) in rt for rt in router_texts if rt)
     ]
+
+    always_hashes = {
+    hashlib.sha1(_norm_text(ch.get("text", "")).encode("utf-8")).hexdigest()
+    for ch in always_blocks
+}
+
+
+    # cross-dedupe: don't include support/catalog blocks that repeat router blocks
+    router_hashes = {hashlib.sha1(ch["text"].strip().encode("utf-8")).hexdigest() for ch in router_blocks}
+
+    router_blocks = [
+        ch for ch in router_blocks
+        if hashlib.sha1(_norm_text(ch.get("text", "")).encode("utf-8")).hexdigest() not in always_hashes
+    ]
+    support_blocks = [
+        ch for ch in support_blocks
+        if hashlib.sha1(_norm_text(ch.get("text", "")).encode("utf-8")).hexdigest() not in always_hashes
+    ]
+    catalog_blocks = [
+        ch for ch in catalog_blocks
+        if hashlib.sha1(_norm_text(ch.get("text", "")).encode("utf-8")).hexdigest() not in always_hashes
+    ] 
 
     # 4) Enforce section caps (after dedupe)
     _enforce_caps(router_blocks, support_blocks, catalog_blocks)
@@ -143,6 +240,10 @@ def assemble_prompt(
     chunks_in_order: List[Dict] = []
 
     for ch in core_blocks:
+        parts.append(ch["text"].strip())
+        chunks_in_order.append(ch)
+
+    for ch in always_blocks:
         parts.append(ch["text"].strip())
         chunks_in_order.append(ch)
 

@@ -3,25 +3,25 @@ try-rag
 
 Overview
 --------
-This project builds a retrieval-augmented prompt assembler for a workflow-planning LLM.
-It embeds short routing summaries ("data") into a Chroma vector store, uses those
-embeddings to route a user query to the most relevant rule topics, expands related
-support rules, and assembles a final prompt that drives a planner model to output a
+This project builds a prompt for a workflow-planning LLM using retrieval-augmented
+generation (RAG). It stores short routing summaries in a Chroma vector store, uses
+those embeddings to pick the best topics for a user query, expands related support
+rules, and assembles a final prompt that the planner model uses to output a
 structured workflow plan in Markdown.
 
-The core flow is:
-- Curate chunk rules in `data/rag_chunks_data_clean.py`
-- Validate and embed chunk data into Chroma
-- Route a query to relevant topics via embeddings
-- Assemble a prompt (core + router + support + user query)
-- Send the prompt to an LLM to produce the workflow plan
+In plain terms:
+- You write small, curated rule chunks.
+- The system embeds the short summaries of those chunks.
+- A query is routed to the best-matching topics.
+- The full rule text is assembled into one prompt.
+- The planner LLM returns a workflow plan.
 
 Project layout
 --------------
 - `rag/`
-  - `router.py`: Embedding-based topic routing with priority and guardrails.
+  - `router.py`: Embedding-based topic routing with guardrails.
   - `assembler.py`: Builds the final prompt from core, router, and support chunks.
-  - `support_expander.py`: Expands selected topics into related support chunks.
+  - `support_expander.py`: Expands router topics into related support chunks.
   - `registry.py`: Merges clean chunk data with any legacy chunk sources.
   - `create_embeddings.py`: Validates and embeds chunk data into Chroma.
   - `query_embeddings.py`: Debug tool to inspect embedding matches.
@@ -32,31 +32,24 @@ Project layout
 - `scripts/`
   - `run_planner.py`: End-to-end prompt assembly + LLM call.
   - `smoke_planner.py`: Quick prompt preview.
-- `tests/`
-  - Router and prompt assembly tests.
+- `tests/`: Router and prompt assembly tests.
 - `planner.py`: Full agent/backstory prompt source used by chunk data (long text).
 - `main.py`: Minimal entry point stub.
 
-Key concepts
-------------
-- Chunk format:
-  - `doc_type`: CORE / RULE / CATALOG
-  - `topic`: Routing topic (e.g., `data_extraction`, `conditions`)
-  - `priority`: Higher wins on near-ties
-  - `role`: `router`, `support`, or `static`
-  - `data`: Short summary that gets embedded
-  - `text`: Full content inserted into prompts
-- Embeddings:
-  - Only `data` is embedded for retrieval.
-  - `text` is stored in Chroma documents for prompt assembly and debugging.
-- Routing:
-  - `rag/router.py` embeds the query, retrieves candidate chunks, groups by topic,
-    and applies thresholds to select one or more topics.
-  - Stop-early topics (e.g., `user_mgmt`, `static_vs_dynamic`) short-circuit routing.
+Key concepts (simple explanations)
+----------------------------------
+- Chunk:
+  - A small, curated rule unit with a short summary and a full text block.
+  - Summary is used for retrieval; full text is inserted into the final prompt.
+- Topic routing:
+  - The system matches the user query to the most relevant topics using embeddings.
+  - It limits how many topics can be selected and blocks unsafe or irrelevant ones.
+- Support expansion:
+  - After routing, related helper topics are added (e.g., planner policy or loops).
 - Prompt assembly:
-  - `rag/assembler.py` always injects core/static content.
-  - It then inserts router topics and related support chunks.
-  - The user query is appended at the end as `USER.QUERY`.
+  - Core/static rules are always included.
+  - Router topics and support topics are included next.
+  - The user query is appended at the end under `USER.QUERY`.
 
 Setup
 -----
@@ -95,7 +88,7 @@ LLM_TEMPERATURE=0.2
 
 Build embeddings
 ----------------
-This creates a fresh Chroma collection from `data/rag_chunks_data_clean.py`.
+Creates a fresh Chroma collection from `data/rag_chunks_data_clean.py`.
 ```bash
 python rag/create_embeddings.py
 ```
@@ -130,15 +123,14 @@ Notes and conventions
 - `data/rag_chunks.py` is optional legacy input; `rag/registry.py` merges it but
   prefers the clean version.
 - Routing favors lower embedding distance and higher priority in near ties.
-- Retrieval queries are prevented from being routed to action-CRUD topics.
+- Retrieval queries are prevented from routing to action-CRUD topics.
 - Prompt assembly deduplicates blocks by text hash and prevents router/support
   duplication.
 
-How chunking works
-------------------
-Chunks are not produced by an automated splitter; they are authored and curated
-manually in `data/rag_chunks_data_clean.py`. Each chunk is a dict with a fixed
-schema:
+How chunking works (simple view)
+--------------------------------
+Chunks are authored manually in `data/rag_chunks_data_clean.py`. Each chunk is a
+small dict with a fixed schema:
 - `doc_type`: logical family (CORE/RULE/CATALOG)
 - `topic`: routing topic key (e.g., `data_extraction`, `conditions`)
 - `priority`: numeric rank used for tie-breaking
@@ -152,35 +144,43 @@ then flattens them into the `chunk_data` list. `rag/registry.py` normalizes and
 merges this clean list with any legacy chunk list from `data/rag_chunks.py`,
 preferring the clean version.
 
-How retrieval builds the final prompt
--------------------------------------
-1) **Embeddings index**
-   - `rag/create_embeddings.py` validates chunks and embeds only `chunk["data"]`.
-   - Embeddings are stored in Chroma; `chunk["text"]` is stored as the document
-     payload for later inclusion in prompts.
+Complete retrieval + assembly flow (plain language)
+---------------------------------------------------
+1) Chunk registration and validation
+   - `data/rag_chunks_data_clean.py` defines the authoritative chunks.
+   - `rag/registry.py` merges clean chunks with any legacy ones and normalizes
+     them into a single list.
+   - `rag/validator.py` enforces the schema so every chunk has the fields needed
+     for routing and assembly.
 
-2) **Query routing**
-   - `rag/router.py` embeds the user query and performs a vector search in the
-     Chroma collection (`TOP_K` results).
-   - It filters to `role == "router"` chunks, keeps the top `TOP_ROUTER`, then
-     groups by `(doc_type, topic, role)` and keeps the best distance per group.
-   - Priority is used as a tie-breaker when distances are within
-     `PRIORITY_EPSILON`.
-   - It applies distance-gap thresholds (`ROUTER_MAX_ABS_GAP`,
-     `ROUTER_MAX_REL_GAP`, `ROUTER_MIN_GAP_TO_ALLOW_MULTI`) to allow one or more
-     topics, capped by `MAX_ALLOWED_TOPICS`.
-   - Stop-early topics (`user_mgmt`, `static_vs_dynamic`) short-circuit routing.
-   - Retrieval-style queries are prevented from routing to CRUD action topics,
-     and fall back to retrieval topics when needed.
+2) Embeddings index
+   - `rag/create_embeddings.py` embeds only the short `chunk["data"]` summary.
+   - The full `chunk["text"]` is stored as the Chroma document payload so it can
+     be inserted into the final prompt later.
 
-3) **Support expansion**
-   - `rag/support_expander.py` expands the selected router topics into related
-     support topics (e.g., conditions/loops or planner policy), but only for
-     allowed topics and with rules to avoid over-including catalogs.
+3) Query routing (retrieval)
+   - `rag/router.py` embeds the user query and searches the Chroma collection.
+   - It keeps only `role == "router"` results, then groups by `(doc_type, topic)`.
+   - For each group, the best (lowest-distance) result wins; priority breaks
+     near-ties using `PRIORITY_EPSILON`.
+   - Gap rules (`ROUTER_MAX_ABS_GAP`, `ROUTER_MAX_REL_GAP`,
+     `ROUTER_MIN_GAP_TO_ALLOW_MULTI`) decide whether to pick one topic or a few,
+     capped by `MAX_ALLOWED_TOPICS`.
+   - Stop-early topics (e.g., `user_mgmt`, `static_vs_dynamic`) short-circuit
+     routing to avoid over-expanding unrelated rules.
+   - Retrieval-style queries are prevented from routing to CRUD action topics
+     and are redirected to safer retrieval topics when needed.
 
-4) **Prompt assembly**
-   - `rag/assembler.py` always injects static CORE chunks first.
-   - It then inserts router chunks for the allowed topics, followed by support
-     chunks.
+4) Support expansion
+   - `rag/support_expander.py` takes the chosen router topics and adds related
+     support topics (e.g., conditions, loops, planner policy) when allowed.
+   - It avoids over-including catalogs or unrelated sections.
+
+5) Prompt assembly
+   - `rag/assembler.py` builds the final prompt in a fixed order:
+     1) core/static chunks (always included)
+     2) selected router chunks
+     3) expanded support chunks
+     4) the user query appended under `USER.QUERY`
    - Router and support blocks are deduplicated by text hash to avoid repeats.
-   - The user query is appended at the end under a `USER.QUERY` header.
+   - The assembled prompt is ready for the planner LLM to produce a workflow.
