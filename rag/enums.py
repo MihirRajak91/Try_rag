@@ -1,0 +1,79 @@
+# rag/enums.py
+
+TRIGGERS = {
+    "TRG_API",
+    "TRG_DB",
+    "TRG_FILE",
+    "TRG_SCH",
+    "TRG_BTN",
+    "TRG_WBH",
+    "TRG_AUTH",
+    "TRG_APRVL",
+    "TRG_FLD",
+    "TRG_OUT",
+}
+
+EVENTS = {
+    "EVNT_NOTI_MAIL",
+    "EVNT_NOTI_SMS",
+    "EVNT_NOTI_NOTI",
+    "EVNT_NOTI_PUSH",
+    "EVNT_NOTI_WBH",
+    "EVNT_UX_ALRT",
+
+    "EVNT_RCRD_ADD",
+    "EVNT_RCRD_INFO",
+    "EVNT_RCRD_UPDT",
+    "EVNT_RCRD_DEL",
+    "EVNT_RCRD_REST",
+    "EVNT_RCRD_DUP",
+
+    "EVNT_RCRD_ADD_STC",
+    "EVNT_RCRD_INFO_STC",
+    "EVNT_RCRD_UPDT_STC",
+    "EVNT_RCRD_DEL_STC",
+    "EVNT_RCRD_REST_STC",
+    "EVNT_RCRD_DUP_STC",
+
+    "EVNT_FLTR",
+    "EVNT_JMES",
+    "EVNT_DATA_OPR",
+    "EVNT_JSON_CNTRCT",
+    "EVNT_LGR",
+
+    "EVNT_USER_MGMT_ADD",
+    "EVNT_USER_MGMT_UPDT",
+    "EVNT_USER_MGMT_DEACT",
+    "EVNT_USER_MGMT_ASSIGN",
+    "EVNT_USER_MGMT_EXTND",
+
+    "EVNT_EXT_API",
+    "EVNT_EXT_DB",
+
+    "EVNT_VAR_ADD",
+    "EVNT_VAR_INFO",
+    "EVNT_VAR_UPDT",
+    "EVNT_VAR_DEL",
+
+    "EVNT_LOOP_FOR",
+    "EVNT_LOOP_WHILE",
+    "EVNT_LOOP_DOWHILE",
+    "EVNT_LOOP_BREAK",
+    "EVNT_LOOP_CONTINUE",
+
+    "EVNT_CHATGPT"
+}
+
+CONDITIONS = {
+    "CNDN_BIN",
+    "CNDN_SEQ",
+    "CNDN_LGC",
+    "CNDN_DOM",
+    "CNDN_LGC_DOM",
+}
+
+LOOPS = {
+    "EVNT_LOOP_FOR",
+    "EVNT_LOOP_WHILE",
+    "EVNT_LOOP_DOWHILE",
+}

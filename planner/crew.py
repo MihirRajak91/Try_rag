@@ -1,9 +1,14 @@
 # planner/crew.py
 from crewai import Agent, Task, Crew, Process
-from planner.tools import AssemblePromptTool, ValidatePlanTool
+from planner.tools import AssemblePromptTool, JudgePlanTool
+
+from planner.judge_context import (
+    TRIGGERS_ENUMS, EVENT_ENUMS, CONDITION_ENUMS, LOOP_ENUMS, JUDGE_RULES
+)
+
 
 assemble_tool = AssemblePromptTool()
-validate_tool = ValidatePlanTool()
+judge_tool = JudgePlanTool()
 
 assembler_agent = Agent(
     role="Prompt Assembler Agent",
@@ -22,12 +27,17 @@ planner_agent = Agent(
 )
 
 validator_agent = Agent(
-    role="Workflow Plan Validator Agent",
-    goal="Validate the drafted workflow plan and report errors/warnings as JSON.",
-    backstory="You enforce the output contract. Use the validate_plan tool.",
-    tools=[validate_tool],
+    role="Workflow Plan Judge",
+    goal="Decide whether the workflow plan is correct for the given user query.",
+    backstory=(
+        "You are a strict judge. You do not rewrite plans. "
+        "You compare expected vs actual usage of triggers, events, conditions, and loops. "
+        "You return JSON only."
+    ),
+    tools=[judge_tool],
     verbose=True,
 )
+
 
 refiner_agent = Agent(
     role="Workflow Plan Refiner Agent",
@@ -61,25 +71,49 @@ t2_draft = Task(
 
 t3_validate = Task(
     description=(
-        "Validate the drafted Markdown plan from the previous task using the validate_plan tool.\n"
-        "Return ONLY the raw JSON result from the tool (ok/errors/warnings). Do not add commentary."
+        "Call the judge_plan tool.\n"
+        "Use these exact inputs:\n\n"
+        f"query: {{query}}\n\n"
+        "plan_markdown: (the drafted Markdown plan from Task 2)\n\n"
+        f"triggers: {TRIGGERS_ENUMS}\n\n"
+        f"events: {EVENT_ENUMS}\n\n"
+        f"conditions: {CONDITION_ENUMS}\n\n"
+        f"loops: {LOOP_ENUMS}\n\n"
+        f"rules: {JUDGE_RULES}\n\n"
+        "Return ONLY the raw JSON string from the tool."
     ),
     agent=validator_agent,
-    expected_output="JSON string: { ok: bool, errors: [...], warnings: [...] }",
+    expected_output="JSON string with keys: { ok, expected, actual, errors, fix_instructions }",
 )
+
+
 
 t4_repair_if_needed = Task(
     description=(
         "You will receive:\n"
-        "A) The drafted Markdown plan from Task 2\n"
-        "B) The validation JSON from Task 3\n\n"
-        "If validation ok=true: return the original plan unchanged.\n"
-        "If ok=false: minimally edit the plan to fix ALL errors. Keep content minimal.\n"
-        "Output ONLY the final Markdown workflow plan."
+        "A) Drafted workflow plan in Markdown (from Task 2)\n"
+        "B) Judge JSON (from Task 3) with keys: ok, errors, fix_instructions, expected, actual\n\n"
+        "RULES:\n"
+        "1) If ok=true: return A exactly unchanged.\n"
+        "2) If ok=false: you are a PATCHER. Apply fix_instructions as literal edits to A.\n"
+        "   - Prefer replacements over additions.\n"
+        "   - Only change the minimum text necessary to resolve EVERY error.\n"
+        "   - Do NOT add new steps unless fix_instructions explicitly requires it.\n"
+        "   - Do NOT invent new enums. Only use enums listed in the plan/judge context.\n"
+        "   - If the plan contains an invalid enum (not in allowed list), replace it with the expected enum.\n\n"
+        "EDIT OPERATIONS ALLOWED:\n"
+        "- Replace invalid/incorrect TRG_* with the expected TRG_*.\n"
+        "- Replace incorrect EVNT_* with expected EVNT_*.\n"
+        "- Remove extra EVNT_*/CNDN_*/EVNT_LOOP_* sections if not required.\n"
+        "- Add a missing required section ONLY if judge says it is missing.\n\n"
+        "OUTPUT:\n"
+        "- Output ONLY the final Markdown workflow plan.\n"
+        "- No JSON, no commentary, no code fences.\n"
     ),
     agent=refiner_agent,
     expected_output="Final Markdown workflow plan (valid).",
 )
+
 
 def build_crew() -> Crew:
     return Crew(
