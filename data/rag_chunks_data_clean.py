@@ -151,7 +151,11 @@ Map intent to the correct EVNT_NOTI_* event:
 - Push → EVNT_NOTI_PUSH
 - Webhook → EVNT_NOTI_WBH
 
-Do not use for record CRUD, loops, or computations."""
+Do not use for record CRUD, loops, or computations.
+
+- if recipient email isn’t given → add a “resolve recipient” step OR treat “anish” as user record lookup
+- if subject/body not given → include placeholders
+"""
 }
 
 PROMPT_DATA_OPS_RULES = {
