@@ -20,6 +20,9 @@ except Exception as e:
     logger.error(f"Failed to initialize ChatOpenAI in orchestrator: {str(e)}")
     raise
 
+_EVNT_RE = re.compile(r"\bEVNT_[A-Z0-9_]+\b")
+_CNDN_RE = re.compile(r"\bCNDN_[A-Z0-9_]+\b")
+
 # -------- Planner Agent --------
 planner_agent = Agent(
     role="Workflow Planner",
@@ -1107,6 +1110,84 @@ OUTPUT: Markdown Structured Workflow Plan ONLY.
 """
 logger.debug("Defined full prompt for planner_agent")
 
+
+def run_planner_full(user_input: str):
+    """
+    DROP-IN replacement for plan_workflow(user_input)
+
+    Returns:
+        workflow_plan (str)
+        codes_output (dict)  <-- consumed by crew agents
+    """
+
+    # --- 1. RAG prompt assembly ---
+    prompt, audit, manifest = assemble_prompt(
+        user_input,
+        debug=False,
+        return_audit=True,
+        return_manifest=True,
+    )
+
+    # --- 2. Call LLM ---
+    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    resp = client.chat.completions.create(
+        model=os.getenv("OPENAI_MODEL", "gpt-4.1-mini"),
+        temperature=0.2,
+        messages=[
+            {"role": "system", "content": "You are an expert workflow automation architect."},
+            {"role": "user", "content": prompt},
+        ],
+    )
+
+    workflow_plan = resp.choices[0].message.content.strip()
+
+    # --- 3. Semantic extraction (SAME responsibility as old plan_workflow) ---
+    codes_output = _extract_codes_from_workflow_plan(workflow_plan)
+
+    # --- 4. Optional metadata (safe for crews) ---
+    codes_output["routing"] = manifest.get("routing", {})
+    codes_output["audit"] = manifest.get("audit", {})
+    codes_output["query"] = user_input
+
+    return workflow_plan, codes_output
+
+def _extract_codes_from_workflow_plan(workflow_plan: str):
+    text = workflow_plan or ""
+
+    # --- Events (ordered, unique) ---
+    events = []
+    seen = set()
+    for m in _EVNT_RE.finditer(text):
+        if m.group(0) not in seen:
+            seen.add(m.group(0))
+            events.append(m.group(0))
+
+    # --- Conditions ---
+    conditions = list(dict.fromkeys(_CNDN_RE.findall(text)))
+
+    # --- Binary branches ---
+    binary_branches = {}
+    if "CNDN_BIN" in text:
+        if_match = re.search(r"IF TRUE:.*?(EVNT_[A-Z0-9_]+)", text, re.S)
+        else_match = re.search(r"IF FALSE:.*?(EVNT_[A-Z0-9_]+)", text, re.S)
+
+        binary_branches = {
+            "if_branch_event": if_match.group(1) if if_match else None,
+            "else_branch_event": else_match.group(1) if else_match else "END",
+        }
+
+    # --- Sequence logic blocks ---
+    sequence_logic_blocks = []
+    if "CNDN_SEQ" in text:
+        blocks = re.findall(r"CNDN_LGC.*?(EVNT_[A-Z0-9_]+)", text, re.S)
+        sequence_logic_blocks = [{"event": e} for e in blocks]
+
+    return {
+        "events": events,
+        "conditions": conditions,
+        "binary_branches": binary_branches,
+        "sequence_logic_blocks": sequence_logic_blocks,
+    }
 
 
 def plan_workflow(user_input: str):

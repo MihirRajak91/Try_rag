@@ -91,7 +91,7 @@ OUTPUT FORMAT (JSON ONLY):
   "expected": {{
     "trigger": "TRG_*",
     "events": ["EVNT_*"],
-    "conditions": {{ "required": true, "type": "CNDN_*" }},
+    "conditions": {{ "required": true, "type": "CNDN_*" }}, 
     "loops": {{ "required": false, "type": null }}
   }},
   "actual": {{
