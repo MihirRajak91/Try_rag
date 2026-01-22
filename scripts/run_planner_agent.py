@@ -1,5 +1,6 @@
 # scripts/run_planner_agent.py
-from planner.crew import build_crew
+import json
+from planner.compiler_with_crew import compile_with_crew
 
 def main():
     q = input("Enter query: ").strip()
@@ -7,11 +8,13 @@ def main():
         print("Empty query.")
         return
 
-    crew = build_crew()
-    result = crew.kickoff(inputs={"query": q})
+    plan, judge = compile_with_crew(q, max_iters=2, verbose=True)
 
     print("\n=== PLAN ===\n")
-    print(result)
+    print(plan)
+
+    print("\n=== JUDGE ===\n")
+    print(json.dumps(judge, indent=2, ensure_ascii=False))
 
 if __name__ == "__main__":
     main()

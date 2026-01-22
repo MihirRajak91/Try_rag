@@ -36,6 +36,7 @@ validator_agent = Agent(
     ),
     tools=[judge_tool],
     verbose=True,
+    temperature=0,
 )
 
 
@@ -71,36 +72,53 @@ t2_draft = Task(
 
 t3_validate = Task(
     description=(
-        "Call the judge_plan tool.\n"
-        "Use these exact inputs:\n\n"
-        f"query: {{query}}\n\n"
-        "plan_markdown: (the drafted Markdown plan from Task 2)\n\n"
+        "You must call the tool: judge_plan.\n\n"
+        "ABSOLUTE RULES:\n"
+        "1) Call judge_plan exactly ONCE.\n"
+        "2) Use the inputs below EXACTLY. Every value must be a plain string.\n"
+        "3) Your final output MUST be exactly the tool's raw JSON output string.\n"
+        "   - No extra text.\n"
+        "   - No code fences.\n"
+        "   - No Thought/Action formatting.\n"
+        "   - Do not rephrase, summarize, or add keys.\n\n"
+        "INPUTS (plain strings):\n"
+        "query: {query}\n\n"
+        "plan_markdown:\n{plan_markdown}\n\n"
         f"triggers: {TRIGGERS_ENUMS}\n\n"
         f"events: {EVENT_ENUMS}\n\n"
         f"conditions: {CONDITION_ENUMS}\n\n"
         f"loops: {LOOP_ENUMS}\n\n"
-        f"rules: {JUDGE_RULES}\n\n"
-        "Return ONLY the raw JSON string from the tool."
+        f"rules:\n{JUDGE_RULES}\n\n"
+        "IMPORTANT:\n"
+        "- Do NOT pass objects like {\"description\": ..., \"type\": ...}.\n"
+        "- Do NOT change the trigger list or enums.\n"
+        "- Return ONLY the tool output."
     ),
     agent=validator_agent,
-    expected_output="JSON string with keys: { ok, expected, actual, errors, fix_instructions }",
+    expected_output="Raw JSON string from judge_plan (no extra text).",
 )
-
-
 
 t4_repair_if_needed = Task(
     description=(
         "You will receive:\n"
-        "A) Drafted workflow plan in Markdown (from Task 2)\n"
-        "B) Judge JSON (from Task 3) with keys: ok, errors, fix_instructions, expected, actual\n\n"
+        "A) Drafted workflow plan in Markdown:\n\n"
+        "{plan_markdown}\n\n"
+        "B) Judge JSON (a JSON object):\n\n"
+        "{judge_json}\n\n"
+        "IMPORTANT:\n"
+        "- Treat B as JSON and read ONLY these keys: B.ok (boolean) and B.fix_instructions (list of strings).\n"
+        "- Consider B.fix_instructions EMPTY if it is missing, null, an empty list, or contains only 'None'/'null'/empty strings.\n"
+        "- Do NOT guess missing instructions.\n\n"
         "RULES:\n"
-        "1) If ok=true: return A exactly unchanged.\n"
-        "2) If ok=false: you are a PATCHER. Apply fix_instructions as literal edits to A.\n"
-        "   - Prefer replacements over additions.\n"
-        "   - Only change the minimum text necessary to resolve EVERY error.\n"
-        "   - Do NOT add new steps unless fix_instructions explicitly requires it.\n"
-        "   - Do NOT invent new enums. Only use enums listed in the plan/judge context.\n"
-        "   - If the plan contains an invalid enum (not in allowed list), replace it with the expected enum.\n\n"
+        "1) If B.ok=true: return A exactly unchanged.\n"
+        "2) If B.ok=false:\n"
+        "   - If B.fix_instructions is EMPTY (per definition above): return A exactly unchanged.\n"
+        "   - Else: you are a PATCHER. Apply B.fix_instructions as literal edits to A.\n"
+        "     - Prefer replacements over additions.\n"
+        "     - Only change the minimum text necessary to resolve EVERY error.\n"
+        "     - Do NOT add new steps unless fix_instructions explicitly requires it.\n"
+        "     - Do NOT invent new enums. Only use enums listed in the plan/judge context.\n"
+        "     - If the plan contains an invalid enum (not in allowed list), replace it with the expected enum.\n\n"
         "EDIT OPERATIONS ALLOWED:\n"
         "- Replace invalid/incorrect TRG_* with the expected TRG_*.\n"
         "- Replace incorrect EVNT_* with expected EVNT_*.\n"
@@ -113,6 +131,9 @@ t4_repair_if_needed = Task(
     agent=refiner_agent,
     expected_output="Final Markdown workflow plan (valid).",
 )
+
+
+
 
 
 def build_crew() -> Crew:

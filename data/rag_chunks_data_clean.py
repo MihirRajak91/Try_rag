@@ -1061,6 +1061,8 @@ TRIGGER SELECTION RULES (DEFAULT + DECISION TREE)
 - Use TRG_APRVL only for approval events.
 - Use TRG_FLD only for UI field entry/update events.
 - Use TRG_OUT only for timeouts/expiry.
+
+TRG_NOTI is NOT a valid trigger. Do not invent triggers. For notifications, use EVNT_NOTI_ events and TRG_DB by default unless the user explicitly indicates another trigger type (API/file/schedule/button/webhook/auth/approval/field/timeout).
 """
 }
 

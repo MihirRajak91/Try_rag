@@ -58,7 +58,7 @@ def run_planner_full(query: str, debug: bool = True) -> Dict[str, Any]:
 
     client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
     resp = client.chat.completions.create(
-        model=os.getenv("OPENAI_MODEL", "gpt-4.1-mini"),
+        model=os.getenv("OPENAI_MODEL"),
         messages=[
             {"role": "system", "content": "You are an expert workflow automation architect."},
             {"role": "user", "content": prompt},
