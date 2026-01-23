@@ -84,19 +84,17 @@ t3_validate = Task(
         "INPUTS (plain strings):\n"
         "query: {query}\n\n"
         "plan_markdown:\n{plan_markdown}\n\n"
-        f"triggers: {TRIGGERS_ENUMS}\n\n"
-        f"events: {EVENT_ENUMS}\n\n"
-        f"conditions: {CONDITION_ENUMS}\n\n"
-        f"loops: {LOOP_ENUMS}\n\n"
-        f"rules:\n{JUDGE_RULES}\n\n"
         "IMPORTANT:\n"
+        "- Do NOT invent or pass triggers, events, conditions, loops, or rules.\n"
         "- Do NOT pass objects like {\"description\": ..., \"type\": ...}.\n"
-        "- Do NOT change the trigger list or enums.\n"
+        "- The tool already knows all allowed enums and rules.\n"
         "- Return ONLY the tool output."
     ),
     agent=validator_agent,
+    tools=[judge_tool],  # critical: bind tool at task level
     expected_output="Raw JSON string from judge_plan (no extra text).",
 )
+
 
 t4_repair_if_needed = Task(
     description=(
@@ -136,10 +134,19 @@ t4_repair_if_needed = Task(
 
 
 
-def build_crew() -> Crew:
+def build_crew(*, validate: bool = False) -> Crew:
+    if not validate:
+        return Crew(
+            agents=[assembler_agent, planner_agent],
+            tasks=[t1_assemble, t2_draft],
+            process=Process.sequential,
+            verbose=True,
+        )
+
     return Crew(
         agents=[assembler_agent, planner_agent, validator_agent, refiner_agent],
         tasks=[t1_assemble, t2_draft, t3_validate, t4_repair_if_needed],
         process=Process.sequential,
         verbose=True,
     )
+

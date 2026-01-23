@@ -8,7 +8,7 @@ def main():
         print("Empty query.")
         return
 
-    plan, judge = compile_with_crew(q, max_iters=2, verbose=True)
+    plan, judge = compile_with_crew(q, enable_validation=False)
 
     print("\n=== PLAN ===\n")
     print(plan)

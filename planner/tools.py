@@ -84,11 +84,6 @@ class ValidatePlanTool(BaseTool):
 class JudgePlanInput(BaseModel):
     query: str = Field(..., description="Original user query")
     plan_markdown: str = Field(..., description="Generated workflow plan in Markdown")
-    triggers: str
-    events: str
-    conditions: str
-    loops: str
-    rules: str
 
 
 class JudgePlanResult(BaseModel):
@@ -106,6 +101,7 @@ class JudgePlanTool(BaseTool):
         "No commentary."
     )
     args_schema: Type[BaseModel] = JudgePlanInput
+
 
     def _normalize(self, v: Any) -> str:
         """
@@ -152,23 +148,47 @@ class JudgePlanTool(BaseTool):
 
         return cleaned
 
-    def _run(
-        self,
-        query: str,
-        plan_markdown: str,
-        triggers: str,
-        events: str,
-        conditions: str,
-        loops: str,
-        rules: str,
-    ) -> str:
+    def _run(self, query: str, plan_markdown: str) -> str:
         # ---- Normalize inputs defensively ----
         query = self._normalize(query)
-        triggers = self._normalize(triggers)
-        events = self._normalize(events)
-        conditions = self._normalize(conditions)
-        loops = self._normalize(loops)
-        rules = self._normalize(rules)
+        plan_markdown = self._normalize(plan_markdown)
+
+        logger.info("[judge_plan] TOOL INVOKED")
+
+        try:
+            from planner.judge_context import (
+                TRIGGERS_ENUMS,
+                EVENT_ENUMS,
+                CONDITION_ENUMS,
+                LOOP_ENUMS,
+                JUDGE_RULES,
+            )
+        except Exception:
+            # If you keep enums in different modules, change imports above.
+            # Fail loudly with a helpful error.
+            return json.dumps(
+                {
+                    "ok": False,
+                    "expected": {},
+                    "actual": {},
+                    "errors": [
+                        {
+                            "type": "JUDGE_CONTEXT_IMPORT_FAILED",
+                            "message": "Could not import judge enums/rules. Update import path in JudgePlanTool.",
+                        }
+                    ],
+                    "fix_instructions": [
+                        "Fix JudgePlanTool imports so it can inject allowed enums/rules internally."
+                    ],
+                },
+                ensure_ascii=False,
+            )
+
+        triggers = self._normalize(TRIGGERS_ENUMS)
+        events = self._normalize(EVENT_ENUMS)
+        conditions = self._normalize(CONDITION_ENUMS)
+        loops = self._normalize(LOOP_ENUMS)
+        rules = self._normalize(JUDGE_RULES)
 
         client = OpenAI()
 
