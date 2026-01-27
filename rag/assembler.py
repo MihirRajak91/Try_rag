@@ -1,8 +1,10 @@
-# rag/assembler.py
 import os
-from dataclasses import dataclass
-from typing import Dict, List, Union, Tuple
+import re
 import hashlib
+import time
+import logging
+from dataclasses import dataclass
+from typing import Dict, List
 
 from rag.registry import ALL_CHUNKS
 from rag.router import route, RoutingResult
@@ -10,7 +12,9 @@ from rag.support_expander import expand_support
 from rag.prompt_audit import audit_prompt, PromptAudit
 from rag.manifest import write_manifest
 from rag import router as _router_cfg
- 
+
+logger = logging.getLogger(__name__)
+
 # ----------------------------
 # Caps (env-configurable)
 # ----------------------------
@@ -24,7 +28,6 @@ MANIFEST_SCHEMA_VERSION = 1
 # Always-injected policy blocks
 # ----------------------------
 ALWAYS_TOPIC_HINTS = {
-    # Adjust if your actual topic strings differ
     "router_disambiguation",
     "router_disambig",
     "disambiguation",
@@ -32,8 +35,9 @@ ALWAYS_TOPIC_HINTS = {
     "trigger_catalog",
     "planner_policy",
     "triggers_rules",
-    "output_contract"
+    "output_contract",
 }
+
 
 class PromptTooLargeError(RuntimeError):
     pass
@@ -50,8 +54,25 @@ class ExpansionResult:
     catalogs: List[Dict]
 
 
+class _Timer:
+    def __init__(self):
+        self.start = time.perf_counter()
+
+    def elapsed(self) -> float:
+        return time.perf_counter() - self.start
+
+
+def _has_explicit_branching(q: str) -> bool:
+    t = set(q.lower().replace(",", " ").replace(".", " ").split())
+    return ("else" in t) or ("otherwise" in t) or ("unless" in t)
+
+
 def _sort_by_priority_desc(chunks: List[Dict]) -> List[Dict]:
     return sorted(chunks, key=lambda c: int(c.get("priority", 0)), reverse=True)
+
+
+def _norm_text(s: str) -> str:
+    return " ".join((s or "").strip().split())
 
 
 def _dedupe_by_text(chunks: List[Dict]) -> List[Dict]:
@@ -67,17 +88,31 @@ def _dedupe_by_text(chunks: List[Dict]) -> List[Dict]:
     return out
 
 
-def _norm_text(s: str) -> str:
-    # normalize whitespace so substring checks are reliable
-    return " ".join((s or "").strip().split())
+def _has_condition_language(q: str) -> bool:
+    s = (q or "").lower()
+    if any(w in s for w in ["check if", "verify if", "if not", "else check", "otherwise", "unless"]):
+        return True
+    return len(re.findall(r"\bif\b", s)) >= 2
+
+
+def _has_seq_language(q: str) -> bool:
+    s = (q or "").lower()
+    return bool(re.search(r"\band\b.*\b(check|verify)?\s*if\b", s))
+
+
+def has_dom_language(q: str) -> bool:
+    s = (q or "").lower()
+    s = re.sub(r"[,.]", "", s)
+    s = " ".join(s.split())
+    dom_connectors = ["first check", "if not then", "else check if", "if fails", "if fails try", "try"]
+    pattern = r"|".join(re.escape(k) for k in dom_connectors)
+    splits = [seg.strip() for seg in re.split(pattern, s) if seg.strip()]
+    return len(splits) >= 2
+
 
 def _drop_contained_blocks(chunks: List[Dict]) -> List[Dict]:
-    """
-    If chunk B's normalized text is fully contained within chunk A's normalized text,
-    drop B (keep the more informative chunk).
-    """
     normed = [(_norm_text(ch.get("text", "")), ch) for ch in chunks]
-    out = []
+    out: List[Dict] = []
     for i, (ti, chi) in enumerate(normed):
         if not ti:
             continue
@@ -93,17 +128,13 @@ def _drop_contained_blocks(chunks: List[Dict]) -> List[Dict]:
     return out
 
 
-
 def _is_always_block(ch: Dict) -> bool:
     t = str(ch.get("topic", "")).lower().strip()
     txt = str(ch.get("text", "")).lower()
 
-    # 1) Prefer topic matches (fast + clean)
     if t in ALWAYS_TOPIC_HINTS:
         return True
 
-    # 2) Fallback: match by distinctive headings/phrases in text
-    # (works even if topic names differ)
     if "trigger" in txt and "catalog" in txt:
         return True
     if "planner output policy" in txt:
@@ -119,31 +150,25 @@ def _select_always_blocks(all_chunks: List[Dict]) -> List[Dict]:
     return _dedupe_by_text(_sort_by_priority_desc(blocks))
 
 
-def _expand_support_contract(topics: List[str]) -> ExpansionResult:
-    selected_blocks = expand_support(topics)
+def _expand_support_contract(topics: List[str], winner: str | None = None) -> ExpansionResult:
+    selected_blocks = expand_support(topics, winner=winner)
 
     router_blocks = [ch for ch in selected_blocks if ch.get("role") == "router"]
     support_blocks = [ch for ch in selected_blocks if ch.get("role") == "support"]
 
-    # Catalogs: any support chunk whose doc_type looks like a catalog
     catalogs = [
         ch for ch in support_blocks
         if str(ch.get("doc_type", "")).upper() in {"CATALOG", "CAT", "CATALOGS"}
         or str(ch.get("topic", "")).lower().startswith("catalog")
     ]
 
-    # Keep catalogs out of general support list to avoid duplicates
     catalog_hashes = {hashlib.sha1(ch["text"].strip().encode("utf-8")).hexdigest() for ch in catalogs}
     support_blocks = [
         ch for ch in support_blocks
         if hashlib.sha1(ch["text"].strip().encode("utf-8")).hexdigest() not in catalog_hashes
     ]
 
-    return ExpansionResult(
-        router_blocks=router_blocks,
-        support_blocks=support_blocks,
-        catalogs=catalogs,
-    )
+    return ExpansionResult(router_blocks=router_blocks, support_blocks=support_blocks, catalogs=catalogs)
 
 
 def _enforce_caps(router_blocks: List[Dict], support_blocks: List[Dict], catalog_blocks: List[Dict]) -> None:
@@ -170,36 +195,46 @@ def assemble_prompt(
     return_audit: bool = False,
     return_manifest: bool = False,
 ):
-    # 1) CORE intro (static always)
+    asm_timer = _Timer()
+    timings: Dict[str, float] = {}
+
+    # 1) CORE intro + ALWAYS
+    t_core = _Timer()
     core_blocks = [
         ch for ch in ALL_CHUNKS
-        if ch.get("role") == "static" and (
-            ch.get("doc_type") == "CORE" or ch.get("topic") in {"core_intro", "intro", "core"}
-        )
+        if ch.get("role") == "static"
+        and (ch.get("doc_type") == "CORE" or ch.get("topic") in {"core_intro", "intro", "core"})
     ]
     core_blocks = _sort_by_priority_desc(core_blocks)
-
-    # 1b) ALWAYS policy blocks (must be present like original planner)
     always_blocks = _select_always_blocks(ALL_CHUNKS)
-
+    timings["core_always_s"] = t_core.elapsed()
 
     # 2) Router contract
+    t_router = _Timer()
     routing: RoutingResult = route(user_query, debug=debug)
     topics = list(routing.topics)
+    timings["router_call_s"] = t_router.elapsed()
 
-    # 3) Expand support via contract
-    exp = _expand_support_contract(topics)
+    # FORCE include conditions topic when language appears
+    if _has_condition_language(user_query) and "conditions" not in topics:
+        topics.append("conditions")
+
+    # 3) Expand support
+    t_expand = _Timer()
+    exp = _expand_support_contract(topics, winner=routing.winner)
+    timings["expand_support_s"] = t_expand.elapsed()
+
+    # 4) dedupe/drop
+    t_dedupe = _Timer()
 
     router_blocks = _dedupe_by_text(_sort_by_priority_desc(exp.router_blocks))
     support_blocks = _dedupe_by_text(_sort_by_priority_desc(exp.support_blocks))
     catalog_blocks = _dedupe_by_text(_sort_by_priority_desc(exp.catalogs))
 
-    # Drop blocks that are contained inside other blocks (prevents partial duplicates)
     router_blocks = _drop_contained_blocks(router_blocks)
     support_blocks = _drop_contained_blocks(support_blocks)
     catalog_blocks = _drop_contained_blocks(catalog_blocks)
 
-    # Cross-drop: if a support/catalog block is contained within any router block, drop it
     router_texts = [_norm_text(ch.get("text", "")) for ch in router_blocks]
     support_blocks = [
         ch for ch in support_blocks
@@ -211,13 +246,9 @@ def assemble_prompt(
     ]
 
     always_hashes = {
-    hashlib.sha1(_norm_text(ch.get("text", "")).encode("utf-8")).hexdigest()
-    for ch in always_blocks
-}
-
-
-    # cross-dedupe: don't include support/catalog blocks that repeat router blocks
-    router_hashes = {hashlib.sha1(ch["text"].strip().encode("utf-8")).hexdigest() for ch in router_blocks}
+        hashlib.sha1(_norm_text(ch.get("text", "")).encode("utf-8")).hexdigest()
+        for ch in always_blocks
+    }
 
     router_blocks = [
         ch for ch in router_blocks
@@ -230,49 +261,45 @@ def assemble_prompt(
     catalog_blocks = [
         ch for ch in catalog_blocks
         if hashlib.sha1(_norm_text(ch.get("text", "")).encode("utf-8")).hexdigest() not in always_hashes
-    ] 
+    ]
 
-    # 4) Enforce section caps (after dedupe)
+    timings["dedupe_drop_s"] = t_dedupe.elapsed()
+
+    # 5) caps
     _enforce_caps(router_blocks, support_blocks, catalog_blocks)
 
-    # 5) Build prompt in strict order
+    # 6) build prompt
+    t_prompt = _Timer()
     parts: List[str] = []
     chunks_in_order: List[Dict] = []
 
     for ch in core_blocks:
-        parts.append(ch["text"].strip())
-        chunks_in_order.append(ch)
-
+        parts.append(ch["text"].strip()); chunks_in_order.append(ch)
     for ch in always_blocks:
-        parts.append(ch["text"].strip())
-        chunks_in_order.append(ch)
-
+        parts.append(ch["text"].strip()); chunks_in_order.append(ch)
     for ch in router_blocks:
-        parts.append(ch["text"].strip())
-        chunks_in_order.append(ch)
-
+        parts.append(ch["text"].strip()); chunks_in_order.append(ch)
     for ch in support_blocks:
-        parts.append(ch["text"].strip())
-        chunks_in_order.append(ch)
-
+        parts.append(ch["text"].strip()); chunks_in_order.append(ch)
     for ch in catalog_blocks:
-        parts.append(ch["text"].strip())
-        chunks_in_order.append(ch)
+        parts.append(ch["text"].strip()); chunks_in_order.append(ch)
 
     parts.append("USER.QUERY\n" + user_query.strip())
-
-    # IMPORTANT: keep a raw prompt for audit/manifest (no debug header)
     final_prompt_raw = "\n\n---\n\n".join([p for p in parts if p])
+    timings["prompt_build_s"] = t_prompt.elapsed()
 
-    # 6) Enforce prompt-size cap (approx tokens)
-    audit = audit_prompt(chunks_in_order=chunks_in_order, final_prompt=final_prompt_raw)
+    # 7) audit
+    t_audit = _Timer()
+    audit: PromptAudit = audit_prompt(chunks_in_order=chunks_in_order, final_prompt=final_prompt_raw)
+    timings["audit_s"] = t_audit.elapsed()
+
     if audit.approx_tokens > MAX_PROMPT_TOKENS_APPROX:
         raise PromptTooLargeError(
             f"Prompt token cap exceeded (approx): {audit.approx_tokens} > {MAX_PROMPT_TOKENS_APPROX}. "
             f"(Set MAX_PROMPT_TOKENS_APPROX env var to increase.)"
         )
 
-    # 7) Optional manifest (based on raw prompt + chosen chunks)
+    # 8) manifest
     manifest = None
     if return_manifest:
         chunks_meta = []
@@ -283,8 +310,10 @@ def assemble_prompt(
                 "role": ch.get("role"),
                 "priority": int(ch.get("priority", 0)),
                 "source": ch.get("source"),
-                "fingerprint": hashlib.sha1(ch.get("text", "").strip().encode("utf-8")).hexdigest(),
+                "fingerprint": hashlib.sha1((ch.get("text", "") or "").strip().encode("utf-8")).hexdigest(),
             })
+
+        timings["assembler_total_s"] = asm_timer.elapsed()
 
         manifest = {
             "schema_version": MANIFEST_SCHEMA_VERSION,
@@ -296,7 +325,7 @@ def assemble_prompt(
             "query": user_query,
             "routing": {
                 "winner": routing.winner,
-                "topics": list(routing.topics),
+                "topics": list(topics),
                 "secondary": list(routing.secondary),
             },
             "audit": {
@@ -309,13 +338,16 @@ def assemble_prompt(
                 "chunk_fingerprints": list(audit.chunk_fingerprints),
             },
             "chunks": chunks_meta,
+            "timing": {
+                **timings,
+                **(routing.timing or {}),
+            },
         }
 
-
-    # 8) Debug header only for printing/inspection
+    # 9) debug header only for printing/inspection
     final_prompt = final_prompt_raw
     if debug:
-        topics_line = ", ".join(routing.topics) if routing.topics else "(none)"
+        topics_line = ", ".join(topics) if topics else "(none)"
         sec_line = ", ".join(routing.secondary) if routing.secondary else "(none)"
         final_prompt = (
             f"[debug] winner: {routing.winner or '(none)'}\n"
@@ -326,7 +358,101 @@ def assemble_prompt(
             + final_prompt_raw
         )
 
-    # 9) Return combinations
+    # enforcement blocks (keep your existing behavior)
+    if _has_explicit_branching(user_query):
+        final_prompt += """
+
+---
+BRANCHING ENFORCEMENT (HARD RULES)
+
+The user query contains an explicit ELSE/OTHERWISE/UNLESS, so branching is REQUIRED.
+
+You MUST:
+1) Use ## Conditions with exactly one ### CNDN_BIN.
+2) Include BOTH branches:
+- IF TRUE: ↳ <EVNT_* ...>
+- IF FALSE: ↳ <EVNT_* ...>
+3) In ## Steps, do NOT write any freeform "IF ..." text.
+- ## Steps must contain ONLY numbered codes.
+- For this case, ## Steps must be:
+    1. CNDN_BIN
+
+If you violate any rule above, your output is invalid.
+"""
+
+    if _has_seq_language(user_query) and not _has_explicit_branching(user_query):
+        final_prompt += """
+
+---
+SEQUENCE CONDITION ENFORCEMENT (HARD RULES)
+
+The user query contains MULTIPLE INDEPENDENT conditions connected by AND, so CNDN_SEQ is REQUIRED.
+
+You MUST:
+1) In ## Steps, include EXACTLY:
+1. CNDN_SEQ
+
+2) Create a ## Conditions section with exactly:
+### CNDN_SEQ
+
+3) Under ### CNDN_SEQ, write one logic block per independent check using this shape:
+- ↳ (CNDN_LGC) <condition>:
+  ↳ <EVNT_* ...>
+
+4) DO NOT write any freeform "IF ... THEN ..." lines in ## Steps.
+
+If you violate any rule above, your output is invalid.
+"""
+
+    if has_dom_language(user_query) and not _has_explicit_branching(user_query) and not _has_seq_language(user_query):
+        final_prompt += """
+
+---
+DOMINO CASCADING CONDITION ENFORCEMENT (HARD RULES)
+
+The user query contains cascading checks (first check / if not then / else check if / if fails),
+so CNDN_DOM is REQUIRED.
+
+You MUST:
+1) In ## Steps, include EXACTLY:
+    1. CNDN_DOM
+
+2) Create a ## Conditions section with one CNDN_LGC_DOM container per sequential condition.
+
+3) Under each ### CNDN_LGC_DOM container, follow this shape:
+    - IF: ↳ <EVNT_* ...>
+    - ELSE: ↳ route to next container or → END
+
+4) DO NOT write any freeform "IF ... THEN ..." lines in ## Steps.
+
+If you violate any rule above, your output is invalid.
+"""
+
+    # ✅ PRINT timings always (works with your current print-based runner)
+    timings["assembler_total_s"] = asm_timer.elapsed()
+    print(
+        "[timing] assembler "
+        f"core_always={timings.get('core_always_s', 0):.6f}s "
+        f"router_call={timings.get('router_call_s', 0):.6f}s "
+        f"expand_support={timings.get('expand_support_s', 0):.6f}s "
+        f"dedupe_drop={timings.get('dedupe_drop_s', 0):.6f}s "
+        f"prompt_build={timings.get('prompt_build_s', 0):.6f}s "
+        f"audit={timings.get('audit_s', 0):.6f}s "
+        f"total={timings.get('assembler_total_s', 0):.6f}s"
+    )
+
+    if routing.timing:
+        # embed/chroma/centroid/router_total from router
+        rt = routing.timing
+        print(
+            "[timing] router "
+            f"embed={rt.get('embed_s', 0):.3f}s "
+            f"chroma={rt.get('chroma_s', 0):.3f}s "
+            f"centroid={rt.get('centroid_s', 0):.3f}s "
+            f"total={rt.get('router_total_s', 0):.3f}s"
+        )
+
+    # 10) Return combinations
     if return_audit and return_manifest:
         return final_prompt, audit, manifest
     if return_audit:
@@ -334,7 +460,6 @@ def assemble_prompt(
     if return_manifest:
         return final_prompt, manifest
     return final_prompt
-
 
 
 def main():
@@ -348,7 +473,7 @@ def main():
             q,
             debug=True,
             return_audit=True,
-            return_manifest=True
+            return_manifest=True,
         )
 
         path = write_manifest("manifests", manifest)

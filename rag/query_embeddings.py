@@ -1,6 +1,7 @@
 # rag/query_embeddings.py
 import os
 from dotenv import load_dotenv
+import time
 
 import chromadb
 from chromadb.config import Settings
@@ -14,6 +15,7 @@ COLLECTION_NAME = os.getenv("CHROMA_COLLECTION")
 
 EMBED_MODEL = os.getenv("EMBED_MODEL", "text-embedding-3-small")
 TOP_K = int(os.getenv("QUERY_TOP_K", "8"))
+
 
 
 def embed_query(oai: OpenAI, text: str):

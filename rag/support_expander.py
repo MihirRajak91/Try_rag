@@ -8,7 +8,8 @@ ALWAYS_INCLUDE_TOPICS = {"planner_policy"}  # keep tiny
 USER_MGMT_FAMILY = {"user_mgmt"}
 STATIC_FAMILY = {"static_vs_dynamic"}
 CRUD_FAMILY = {"actions_builtin_filtering", "data_retrieval_filtering"}
-CONDITIONS_FAMILY = {"conditions", "cond_bin", "cond_seq", "cond_dom"}
+CONDITIONS_FAMILY = {"conditions", "conditions.bin", "conditions.seq", "conditions.dom"}
+
 LOOPS_FAMILY = {"loops", "flow_formatting"}
 
 
@@ -16,7 +17,7 @@ def _key(ch: Dict) -> Tuple:
     return (ch.get("doc_type"), ch.get("topic"), ch.get("role"), int(ch.get("priority", 0)))
 
 
-def expand_support(allowed_topics: List[str]) -> List[Dict]:
+def expand_support(allowed_topics: List[str],*,winner:str| None=None) -> List[Dict]:
     allowed: Set[str] = set(allowed_topics)
 
     # Only expand topic families if the parent topic is selected
@@ -24,16 +25,17 @@ def expand_support(allowed_topics: List[str]) -> List[Dict]:
 
     # ---- Family expansions (opt-in, deterministic) ----
     if "conditions" in allowed:
-        for t in ("cond_bin", "cond_seq", "cond_dom"):
+        for t in ("conditions.bin", "conditions.seq", "conditions.dom"):
             if t in existing_topics:
                 allowed.add(t)
+
 
     if "loops" in allowed and "flow_formatting" in existing_topics:
         allowed.add("flow_formatting")
 
     # ---- Boundary gates (defensive, future-proof) ----
     # If user_mgmt is present, it dominates support expansion: keep it clean.
-    if "user_mgmt" in allowed:
+    if winner == "user_mgmt":
         allowed = (allowed & USER_MGMT_FAMILY) | ALWAYS_INCLUDE_TOPICS
 
     # If static_vs_dynamic is present (and user_mgmt isn't), prevent CRUD bleed.

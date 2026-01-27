@@ -60,15 +60,32 @@ t1_assemble = Task(
 
 t2_draft = Task(
     description=(
-        "Use ONLY the JSON output from the previous task.\n"
+        "You will be given `assembled_json`.\n"
         "1) Parse the JSON.\n"
         "2) Extract `prompt`.\n"
-        "3) Follow that prompt and generate the workflow plan in Markdown.\n"
+        "3) Follow that prompt and generate the workflow plan in Markdown.\n\n"
+        "assembled_json:\n{assembled_json}\n\n"
+
+        "GENERATION INVARIANTS (must-follow):\n"
+        "- Output the MINIMAL plan that satisfies the user request.\n"
+        "- Include ONLY steps explicitly required by the user intent.\n"
+        "- If multiple rules imply the SAME EVNT_*, emit that event ONLY ONCE.\n"
+        "- If the user intent maps to a single User Management action, output EXACTLY ONE\n"
+        "  EVNT_USER_MGMT_* step.\n"
+        "  - For 'delete/deactivate/remove user' => ONLY EVNT_USER_MGMT_DEACT.\n"
+        "- Do NOT add lookup/info/verification/confirmation/logging steps unless the user explicitly asks.\n"
+        "- Do NOT add EVNT_RCRD_INFO_* for delete operations unless explicitly requested.\n\n"
         "Do not mention JSON. Output ONLY the Markdown plan."
+        "Trigger must be TRG_DB unless the query explicitly mentions API/file/schedule/button/webhook/auth/approval/field-entry/timeout."
+        ""
     ),
     agent=planner_agent,
     expected_output="Markdown workflow plan.",
 )
+
+
+
+
 
 t3_validate = Task(
     description=(

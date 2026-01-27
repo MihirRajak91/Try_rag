@@ -1,4 +1,4 @@
-"""RAG chunk registry.
+"""RAG chunk r gistry.
 
 Each chunk is a dict with:
 - doc_type: CORE/RULE/CATALOG
@@ -169,7 +169,7 @@ Intent: compute/transform/derive a value or reshape data.
 Signals: calculate, compute, sum, total, percentage, concat, uppercase/lowercase, split, replace, regex, format date, add days, round, uuid, random.
 Output: use EVNT_DATA_OPR.""",
 
-    "text": """TEP X: Formula / Calculation Detection (EVNT_DATA_OPR)
+    "text": """STEP X: Formula / Calculation Detection (EVNT_DATA_OPR)
 Use EVNT_DATA_OPR when the user wants to:
 - Perform any calculation: add, subtract, multiply, divide, power, percentage, etc.
 - Manipulate strings: uppercase, lowercase, concatenate, extract, replace, split, regex
@@ -221,7 +221,7 @@ SUPPORT.RULE.data_ops_rules
 Use when the workflow needs full data operation guidance, triggers, and examples.
 """,
 
-    "text": """TEP X: Formula / Calculation Detection (EVNT_DATA_OPR)
+    "text": """STEP X: Formula / Calculation Detection (EVNT_DATA_OPR)
 Use EVNT_DATA_OPR when the user wants to:
 - Perform any calculation: add, subtract, multiply, divide, power, percentage, etc.
 - Manipulate strings: uppercase, lowercase, concatenate, extract, replace, split, regex
@@ -946,6 +946,14 @@ Output: a strict output skeleton the model must follow.
 OUTPUT CONTRACT (STRUCTURED WORKFLOW PLAN TEMPLATE)
 
 Your output MUST be a Markdown Structured Workflow Plan (NOT JSON) using only the sections required.
+
+HARD FORMAT RULES (non-negotiable):
+- NEVER write freeform "IF ... THEN ..." lines inside ## Steps.
+- ## Steps must contain ONLY numbered CODES (EVNT_* and/or CNDN_*)(plus their parameters, if any).
+- If the query requires branching, use ONLY the ## Conditions section with CNDN_BIN.
+- Use ## Conditions ONLY when there are mutually exclusive TRUE vs FALSE paths (if/else).
+- If the query uses "if/when/where" ONLY to select which records to act on (filtering),
+  DO NOT use ## Conditions; encode it as Match/Filter fields inside the EVNT_* step(s).
 
 Use this template (omit sections that are not needed):
 

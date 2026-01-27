@@ -1,27 +1,44 @@
 # planner/compiler_with_crew.py
 import json
+import time
+import logging
 from typing import Any, Dict, Tuple, List
+from contextlib import contextmanager
 
 from crewai import Crew, Process
 
 from planner.crew import (
-    assembler_agent, planner_agent, validator_agent, refiner_agent,
-    t1_assemble, t2_draft, t3_validate, t4_repair_if_needed,
+    assembler_agent,
+    planner_agent,
+    validator_agent,
+    refiner_agent,
+    t1_assemble,
+    t2_draft,
+    t3_validate,
+    t4_repair_if_needed,
 )
 
-import logging
 logger = logging.getLogger(__name__)
 
 
-def _extract_first_json_object(s: str) -> str:
-    """
-    Extract the first complete top-level JSON object from a string.
+# ---------------------------------------------------------------------------
+# Timing utility
+# ---------------------------------------------------------------------------
+@contextmanager
+def phase_timer(label: str):
+    start = time.perf_counter()
+    logger.info("[timer:start] %s", label)
+    try:
+        yield
+    finally:
+        dur = time.perf_counter() - start
+        logger.info("[timer:end] %s took %.3fs", label, dur)
 
-    Handles:
-    - Extra text before/after JSON
-    - Nested objects
-    - Braces inside quoted strings
-    """
+
+# ---------------------------------------------------------------------------
+# JSON helpers
+# ---------------------------------------------------------------------------
+def _extract_first_json_object(s: str) -> str:
     if not s:
         return ""
 
@@ -54,16 +71,21 @@ def _extract_first_json_object(s: str) -> str:
     return ""
 
 
+def _try_parse_json(s: str) -> Dict[str, Any]:
+    """
+    Best-effort parse for assembler JSON.
+    We don't use _safe_json here because that is for judge schema specifically.
+    """
+    raw = (s or "").strip()
+    raw_json = _extract_first_json_object(raw) or raw
+    try:
+        obj = json.loads(raw_json)
+        return obj if isinstance(obj, dict) else {}
+    except Exception:
+        return {}
+
 
 def _safe_json(s: str) -> Dict[str, Any]:
-    """
-    Always return a JudgePlanResult-like dict:
-      ok: bool
-      expected: dict
-      actual: dict
-      errors: list
-      fix_instructions: list
-    """
     raw = (s or "").strip()
     raw_json = _extract_first_json_object(raw) or raw
 
@@ -86,7 +108,7 @@ def _safe_json(s: str) -> Dict[str, Any]:
             return []
         cleaned: List[str] = []
         for x in fix:
-            if x is None:
+            if not x:
                 continue
             s2 = str(x).strip()
             if not s2:
@@ -95,8 +117,6 @@ def _safe_json(s: str) -> Dict[str, Any]:
             if low in {"none", "null", "no", "n/a"}:
                 continue
             if "plan is correct" in low:
-                continue
-            if "appropriate trigger" in low:
                 continue
             cleaned.append(s2)
         return cleaned
@@ -107,164 +127,182 @@ def _safe_json(s: str) -> Dict[str, Any]:
         return {
             "ok": False,
             "expected": {},
-            "actual": {"message": "Judge returned invalid JSON", "error": f"{type(e).__name__}: {e}"},
+            "actual": {
+                "message": "Judge returned invalid JSON",
+                "error": f"{type(e).__name__}: {e}",
+            },
             "errors": [{"type": "INVALID_JSON", "raw": raw[:800]}],
-            "fix_instructions": ["Re-run judge_plan and return valid JSON matching schema."],
+            "fix_instructions": [
+                "Re-run judge_plan and return valid JSON matching schema."
+            ],
         }
 
-    # Normalize shapes defensively
     if not isinstance(parsed, dict):
         return {
             "ok": False,
             "expected": {},
-            "actual": {"message": "Judge returned non-dict JSON", "raw": parsed},
+            "actual": {"message": "Judge returned non-dict JSON"},
             "errors": [{"type": "INVALID_JUDGE_SHAPE"}],
-            "fix_instructions": [
-                "Return a JSON object with keys: ok, expected, actual, errors, fix_instructions."
-            ],
+            "fix_instructions": [],
         }
 
-    # ---- Ensure required keys exist with correct types ----
     ok_val = parsed.get("ok", False)
     ok_bool = bool(ok_val) if isinstance(ok_val, (bool, int)) else False
 
-    expected = _as_dict(parsed.get("expected"))
-    actual = _as_dict(parsed.get("actual"))
-    errors = _as_list(parsed.get("errors"))
-    fix = _clean_fix_list(parsed.get("fix_instructions"))
-
     out: Dict[str, Any] = {
         "ok": ok_bool,
-        "expected": expected,
-        "actual": actual,
-        "errors": errors,
-        "fix_instructions": fix,
+        "expected": _as_dict(parsed.get("expected")),
+        "actual": _as_dict(parsed.get("actual")),
+        "errors": _as_list(parsed.get("errors")),
+        "fix_instructions": _clean_fix_list(parsed.get("fix_instructions")),
     }
 
-    # ---- Invariant enforcement (same logic as tool) ----
-    if out["ok"] is False and len(out["errors"]) == 0 and len(out["fix_instructions"]) == 0:
-        # This is the key case that caused “ok:false even when correct”
-        # Make it explicit and self-healing.
+    # self-healing invariants
+    if out["ok"] is False and not out["errors"] and not out["fix_instructions"]:
         out["ok"] = True
-        out["errors"] = [{"type": "NON_ACTIONABLE_FALSE", "message": "Judge returned ok=false with no errors/fixes; treating as ok=true"}]
+        out["errors"] = [{
+            "type": "NON_ACTIONABLE_FALSE",
+            "message": "Judge returned ok=false with no errors/fixes; treating as ok=true",
+        }]
 
-    if out["ok"] is False and len(out["errors"]) > 0 and len(out["fix_instructions"]) == 0:
+    if out["ok"] is False and out["errors"] and not out["fix_instructions"]:
         out["fix_instructions"] = [
             "Fix the plan to satisfy the judge errors using ONLY allowed enums and rules."
         ]
 
     return out
 
+
+# ---------------------------------------------------------------------------
+# Main compiler
+# ---------------------------------------------------------------------------
 def compile_with_crew(
     query: str,
     max_iters: int = 2,
     verbose: bool = True,
     *,
-    enable_validation: bool = True,   # <-- FLAG
+    enable_validation: bool = True,
 ) -> Tuple[str, Dict[str, Any]]:
-    # ---------------- Draft ----------------
-    draft_crew = Crew(
-        agents=[assembler_agent, planner_agent],
-        tasks=[t1_assemble, t2_draft],
-        process=Process.sequential,
-        verbose=verbose,
-    )
-    drafted_plan = str(draft_crew.kickoff(inputs={"query": query})).strip()
 
-    # ---------------- Draft-only mode (skip t3/t4) ----------------
-    if not enable_validation:
-        judge_json: Dict[str, Any] = {
-            "ok": True,
-            "expected": {"message": "Validation disabled"},
-            "actual": {"message": "Validation disabled"},
-            "errors": [],
-            "fix_instructions": [],
-            "meta": {"validation": "disabled"},
-        }
-        return drafted_plan, judge_json
+    with phase_timer("compile_with_crew:total"):
 
-    # ---------------- Validation mode (t3 + optional t4 loop) ----------------
-    plan = drafted_plan
-    judge_json: Dict[str, Any] = {"ok": False, "expected": {}, "actual": {}, "errors": [], "fix_instructions": []}
+        # ---------------- Draft phase (split) ----------------
+        assembled_json_str = ""
 
-    total_attempts = max_iters
-
-    for attempt in range(1, total_attempts + 1):
-        # ---------------- Judge (t3) ----------------
-        judge_crew = Crew(
-            agents=[validator_agent],
-            tasks=[t3_validate],
-            process=Process.sequential,
-            verbose=verbose,
-        )
-
-        judge_raw = str(
-            judge_crew.kickoff(inputs={"query": query, "plan_markdown": plan})
-        ).strip()
-
-        logger.info("[compiler] judge_raw_prefix=%r", judge_raw[:120])
-
-        judge_json = _safe_json(judge_raw)
-
-        logger.info("[compiler] judge_json=%s", json.dumps(judge_json, ensure_ascii=False))
-
-        logger.info(
-            "[compiler] attempt=%d/%d judge_ok=%s plan_chars=%d errors=%d fixes=%d",
-            attempt,
-            total_attempts,
-            judge_json.get("ok"),
-            len(plan),
-            len(judge_json.get("errors") or []),
-            len(judge_json.get("fix_instructions") or []),
-        )
-
-        # ✅ success
-        if judge_json.get("ok") is True:
-            logger.info("[compiler] SUCCESS at attempt=%d", attempt)
-            return plan, judge_json
-
-        # ✅ if judge is not actionable, stop instead of looping forever
-        if not judge_json.get("errors") and not judge_json.get("fix_instructions"):
-            logger.warning("[compiler] Judge returned ok=false but no errors/fixes; treating as ok=true")
-            judge_json["ok"] = True
-            return plan, judge_json
-
-        # ---------------- Stop if no retries left ----------------
-        if attempt >= total_attempts:
-            break
-
-        # ---------------- Repair (t4) ----------------
-        logger.info("[compiler] attempt=%d repairing plan", attempt)
-
-        repair_crew = Crew(
-            agents=[refiner_agent],
-            tasks=[t4_repair_if_needed],
-            process=Process.sequential,
-            verbose=verbose,
-        )
-
-        plan = str(
-            repair_crew.kickoff(
-                inputs={
-                    "plan_markdown": plan,
-                    "judge_json": json.dumps(judge_json, ensure_ascii=False),
-                }
+        with phase_timer("t1_assemble"):
+            crew1 = Crew(
+                agents=[assembler_agent],
+                tasks=[t1_assemble],
+                process=Process.sequential,
+                verbose=verbose,
             )
-        ).strip()
+            assembled_json_str = str(crew1.kickoff(inputs={"query": query})).strip()
 
-    # ---------------- Fallback ----------------
-    logger.error(
-        "[compiler] MAX_RETRIES_EXCEEDED (%d attempts). Falling back to raw query.",
-        max_iters,
-    )
+        asm_obj = _try_parse_json(assembled_json_str)
+        if asm_obj:
+            routing = asm_obj.get("routing") or {}
+            audit = asm_obj.get("audit") or {}
+            logger.info(
+                "[t1_assemble] prompt_chars=%s approx_tokens=%s chunks=%s winner=%s topics=%s",
+                audit.get("prompt_chars"),
+                audit.get("approx_tokens"),
+                audit.get("chunks_count"),
+                routing.get("winner"),
+                routing.get("topics"),
+            )
+        else:
+            logger.warning("[t1_assemble] could not parse assembler JSON (len=%d)", len(assembled_json_str))
 
-    fallback = {
-        "ok": False,
-        "expected": {"message": "Valid workflow plan"},
-        "actual": {"message": "Max repair attempts exceeded; returning raw query as output"},
-        "errors": (judge_json.get("errors") or []) + [{"type": "MAX_RETRIES_EXCEEDED"}],
-        "fix_instructions": [],
-        "meta": {"fallback": True, "attempts": max_iters},
-    }
-    return query, fallback
+        with phase_timer("t2_draft"):
+            crew2 = Crew(
+                agents=[planner_agent],
+                tasks=[t2_draft],
+                process=Process.sequential,
+                verbose=verbose,
+            )
+            drafted_plan = str(
+                crew2.kickoff(inputs={"assembled_json": assembled_json_str})
+            ).strip()
 
+        logger.info("[t2_draft] plan_len=%d", len(drafted_plan))
+
+        if not enable_validation:
+            return drafted_plan, {
+                "ok": True,
+                "expected": {"message": "Validation disabled"},
+                "actual": {"message": "Validation disabled"},
+                "errors": [],
+                "fix_instructions": [],
+                "meta": {"validation": "disabled"},
+            }
+
+        plan = drafted_plan
+        judge_json: Dict[str, Any] = {}
+
+        # ---------------- Validation loop ----------------
+        for attempt in range(1, max_iters + 1):
+
+            # ---- Judge ----
+            with phase_timer(f"judge_phase attempt={attempt}"):
+                judge_crew = Crew(
+                    agents=[validator_agent],
+                    tasks=[t3_validate],
+                    process=Process.sequential,
+                    verbose=verbose,
+                )
+
+                judge_raw = str(
+                    judge_crew.kickoff(
+                        inputs={"query": query, "plan_markdown": plan}
+                    )
+                ).strip()
+
+            logger.info("[compiler] judge_raw_prefix=%r", judge_raw[:120])
+            judge_json = _safe_json(judge_raw)
+
+            logger.info(
+                "[compiler:attempt_summary] attempt=%d ok=%s plan_len=%d errors=%d fixes=%d",
+                attempt,
+                judge_json.get("ok"),
+                len(plan),
+                len(judge_json.get("errors") or []),
+                len(judge_json.get("fix_instructions") or []),
+            )
+
+            if judge_json.get("ok") is True:
+                logger.info("[compiler] SUCCESS at attempt=%d", attempt)
+                return plan, judge_json
+
+            if attempt >= max_iters:
+                break
+
+            # ---- Repair ----
+            with phase_timer(f"repair_phase attempt={attempt}"):
+                repair_crew = Crew(
+                    agents=[refiner_agent],
+                    tasks=[t4_repair_if_needed],
+                    process=Process.sequential,
+                    verbose=verbose,
+                )
+
+                plan = str(
+                    repair_crew.kickoff(
+                        inputs={
+                            "plan_markdown": plan,
+                            "judge_json": json.dumps(judge_json, ensure_ascii=False),
+                        }
+                    )
+                ).strip()
+
+        # ---------------- Fallback ----------------
+        logger.error("[compiler] MAX_RETRIES_EXCEEDED (%d)", max_iters)
+        return query, {
+            "ok": False,
+            "expected": {"message": "Valid workflow plan"},
+            "actual": {"message": "Max repair attempts exceeded"},
+            "errors": (judge_json.get("errors") or []) + [
+                {"type": "MAX_RETRIES_EXCEEDED"}
+            ],
+            "fix_instructions": [],
+            "meta": {"attempts": max_iters},
+        }
