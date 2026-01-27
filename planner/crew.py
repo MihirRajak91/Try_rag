@@ -64,7 +64,8 @@ t2_draft = Task(
         "1) Parse the JSON.\n"
         "2) Extract `prompt`.\n"
         "3) Follow that prompt and generate the workflow plan in Markdown.\n\n"
-        "assembled_json:\n{assembled_json}\n\n"
+        "assembled_json:\n"
+        "{assembled_json}\n\n"
 
         "GENERATION INVARIANTS (must-follow):\n"
         "- Output the MINIMAL plan that satisfies the user request.\n"
@@ -76,12 +77,12 @@ t2_draft = Task(
         "- Do NOT add lookup/info/verification/confirmation/logging steps unless the user explicitly asks.\n"
         "- Do NOT add EVNT_RCRD_INFO_* for delete operations unless explicitly requested.\n\n"
         "Do not mention JSON. Output ONLY the Markdown plan."
-        "Trigger must be TRG_DB unless the query explicitly mentions API/file/schedule/button/webhook/auth/approval/field-entry/timeout."
-        ""
+         "Trigger must be TRG_DB unless the query explicitly mentions API/file/schedule/button/webhook/auth/approval/field-entry/timeout."
     ),
     agent=planner_agent,
     expected_output="Markdown workflow plan.",
 )
+
 
 
 

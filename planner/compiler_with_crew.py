@@ -5,6 +5,8 @@ import logging
 from typing import Any, Dict, Tuple, List
 from contextlib import contextmanager
 
+from planner.tools import AssemblePromptTool 
+
 from crewai import Crew, Process
 
 from planner.crew import (
@@ -186,46 +188,49 @@ def compile_with_crew(
 
     with phase_timer("compile_with_crew:total"):
 
-        # ---------------- Draft phase (split) ----------------
-        assembled_json_str = ""
-
+        # ---------------- Draft phase ----------------
+        # t1_assemble (NO CrewAI): call tool directly
         with phase_timer("t1_assemble"):
-            crew1 = Crew(
-                agents=[assembler_agent],
-                tasks=[t1_assemble],
-                process=Process.sequential,
-                verbose=verbose,
-            )
-            assembled_json_str = str(crew1.kickoff(inputs={"query": query})).strip()
+            assemble_tool = AssemblePromptTool()
+            assembled_json = assemble_tool._run(
+                query=query,
+                debug=False,
+                save_manifest=False,
+            ).strip()
 
-        asm_obj = _try_parse_json(assembled_json_str)
-        if asm_obj:
-            routing = asm_obj.get("routing") or {}
-            audit = asm_obj.get("audit") or {}
-            logger.info(
-                "[t1_assemble] prompt_chars=%s approx_tokens=%s chunks=%s winner=%s topics=%s",
-                audit.get("prompt_chars"),
-                audit.get("approx_tokens"),
-                audit.get("chunks_count"),
-                routing.get("winner"),
-                routing.get("topics"),
-            )
-        else:
-            logger.warning("[t1_assemble] could not parse assembler JSON (len=%d)", len(assembled_json_str))
+            # optional: log routing summary
+            try:
+                aj = json.loads(assembled_json)
+                routing = aj.get("routing") or {}
+                audit = aj.get("audit") or {}
+                logger.info(
+                    "[t1_assemble] prompt_chars=%s approx_tokens=%s chunks=%s winner=%s topics=%s",
+                    audit.get("prompt_chars"),
+                    audit.get("approx_tokens"),
+                    audit.get("chunks_count"),
+                    routing.get("winner"),
+                    routing.get("topics"),
+                )
+            except Exception:
+                logger.info("[t1_assemble] assembled_json_len=%d", len(assembled_json))
 
+        # t2_draft (CrewAI): single LLM call
         with phase_timer("t2_draft"):
-            crew2 = Crew(
+            draft_crew = Crew(
                 agents=[planner_agent],
                 tasks=[t2_draft],
                 process=Process.sequential,
                 verbose=verbose,
             )
             drafted_plan = str(
-                crew2.kickoff(inputs={"assembled_json": assembled_json_str})
+                draft_crew.kickoff(
+                    inputs={"assembled_json": assembled_json}
+                )
             ).strip()
 
-        logger.info("[t2_draft] plan_len=%d", len(drafted_plan))
+            logger.info("[t2_draft] plan_len=%d", len(drafted_plan))
 
+        # ---------- rest of your validation loop unchanged ----------
         if not enable_validation:
             return drafted_plan, {
                 "ok": True,
@@ -239,10 +244,7 @@ def compile_with_crew(
         plan = drafted_plan
         judge_json: Dict[str, Any] = {}
 
-        # ---------------- Validation loop ----------------
         for attempt in range(1, max_iters + 1):
-
-            # ---- Judge ----
             with phase_timer(f"judge_phase attempt={attempt}"):
                 judge_crew = Crew(
                     agents=[validator_agent],
@@ -250,11 +252,8 @@ def compile_with_crew(
                     process=Process.sequential,
                     verbose=verbose,
                 )
-
                 judge_raw = str(
-                    judge_crew.kickoff(
-                        inputs={"query": query, "plan_markdown": plan}
-                    )
+                    judge_crew.kickoff(inputs={"query": query, "plan_markdown": plan})
                 ).strip()
 
             logger.info("[compiler] judge_raw_prefix=%r", judge_raw[:120])
@@ -276,7 +275,6 @@ def compile_with_crew(
             if attempt >= max_iters:
                 break
 
-            # ---- Repair ----
             with phase_timer(f"repair_phase attempt={attempt}"):
                 repair_crew = Crew(
                     agents=[refiner_agent],
@@ -284,7 +282,6 @@ def compile_with_crew(
                     process=Process.sequential,
                     verbose=verbose,
                 )
-
                 plan = str(
                     repair_crew.kickoff(
                         inputs={
@@ -294,15 +291,12 @@ def compile_with_crew(
                     )
                 ).strip()
 
-        # ---------------- Fallback ----------------
         logger.error("[compiler] MAX_RETRIES_EXCEEDED (%d)", max_iters)
         return query, {
             "ok": False,
             "expected": {"message": "Valid workflow plan"},
             "actual": {"message": "Max repair attempts exceeded"},
-            "errors": (judge_json.get("errors") or []) + [
-                {"type": "MAX_RETRIES_EXCEEDED"}
-            ],
+            "errors": (judge_json.get("errors") or []) + [{"type": "MAX_RETRIES_EXCEEDED"}],
             "fix_instructions": [],
             "meta": {"attempts": max_iters},
         }
