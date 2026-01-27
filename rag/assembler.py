@@ -62,9 +62,9 @@ class _Timer:
         return time.perf_counter() - self.start
 
 
-def _has_explicit_branching(q: str) -> bool:
-    t = set(q.lower().replace(",", " ").replace(".", " ").split())
-    return ("else" in t) or ("otherwise" in t) or ("unless" in t)
+# def _has_explicit_branching(q: str) -> bool:
+#     t = set(q.lower().replace(",", " ").replace(".", " ").split())
+#     return ("else" in t) or ("otherwise" in t) or ("unless" in t)
 
 
 def _sort_by_priority_desc(chunks: List[Dict]) -> List[Dict]:
@@ -88,26 +88,26 @@ def _dedupe_by_text(chunks: List[Dict]) -> List[Dict]:
     return out
 
 
-def _has_condition_language(q: str) -> bool:
-    s = (q or "").lower()
-    if any(w in s for w in ["check if", "verify if", "if not", "else check", "otherwise", "unless"]):
-        return True
-    return len(re.findall(r"\bif\b", s)) >= 2
+# def _has_condition_language(q: str) -> bool:
+#     s = (q or "").lower()
+#     if any(w in s for w in ["check if", "verify if", "if not", "else check", "otherwise", "unless"]):
+#         return True
+#     return len(re.findall(r"\bif\b", s)) >= 2
 
 
-def _has_seq_language(q: str) -> bool:
-    s = (q or "").lower()
-    return bool(re.search(r"\band\b.*\b(check|verify)?\s*if\b", s))
+# def _has_seq_language(q: str) -> bool:
+#     s = (q or "").lower()
+#     return bool(re.search(r"\band\b.*\b(check|verify)?\s*if\b", s))
 
 
-def has_dom_language(q: str) -> bool:
-    s = (q or "").lower()
-    s = re.sub(r"[,.]", "", s)
-    s = " ".join(s.split())
-    dom_connectors = ["first check", "if not then", "else check if", "if fails", "if fails try", "try"]
-    pattern = r"|".join(re.escape(k) for k in dom_connectors)
-    splits = [seg.strip() for seg in re.split(pattern, s) if seg.strip()]
-    return len(splits) >= 2
+# def has_dom_language(q: str) -> bool:
+#     s = (q or "").lower()
+#     s = re.sub(r"[,.]", "", s)
+#     s = " ".join(s.split())
+#     dom_connectors = ["first check", "if not then", "else check if", "if fails", "if fails try", "try"]
+#     pattern = r"|".join(re.escape(k) for k in dom_connectors)
+#     splits = [seg.strip() for seg in re.split(pattern, s) if seg.strip()]
+#     return len(splits) >= 2
 
 
 def _drop_contained_blocks(chunks: List[Dict]) -> List[Dict]:
@@ -216,12 +216,18 @@ def assemble_prompt(
     timings["router_call_s"] = t_router.elapsed()
 
     # FORCE include conditions topic when language appears
-    if _has_condition_language(user_query) and "conditions" not in topics:
-        topics.append("conditions")
+    # if _has_condition_language(user_query) and "conditions" not in topics:
+    #     topics.append("conditions")
 
     # 3) Expand support
     t_expand = _Timer()
     exp = _expand_support_contract(topics, winner=routing.winner)
+
+    if debug:
+        print("[assembler] allowed_topics:", topics)
+        print("[assembler] exp.router_topics:", sorted({c.get("topic") for c in exp.router_blocks}))
+        print("[assembler] exp.support_topics:", sorted({c.get("topic") for c in exp.support_blocks}))
+
     timings["expand_support_s"] = t_expand.elapsed()
 
     # 4) dedupe/drop
@@ -359,74 +365,140 @@ def assemble_prompt(
         )
 
     # enforcement blocks (keep your existing behavior)
-    if _has_explicit_branching(user_query):
+#     if _has_explicit_branching(user_query):
+#         final_prompt += """
+
+# ---
+# BRANCHING ENFORCEMENT (HARD RULES)
+
+# The user query contains an explicit ELSE/OTHERWISE/UNLESS, so branching is REQUIRED.
+
+# You MUST:
+# 1) Use ## Conditions with exactly one ### CNDN_BIN.
+# 2) Include BOTH branches:
+# - IF TRUE: ↳ <EVNT_* ...>
+# - IF FALSE: ↳ <EVNT_* ...>
+# 3) In ## Steps, do NOT write any freeform "IF ..." text.
+# - ## Steps must contain ONLY numbered codes.
+# - For this case, ## Steps must be:
+#     1. CNDN_BIN
+
+# If you violate any rule above, your output is invalid.
+# """
+
+#     if _has_seq_language(user_query) and not _has_explicit_branching(user_query):
+#         final_prompt += """
+
+# ---
+# SEQUENCE CONDITION ENFORCEMENT (HARD RULES)
+
+# The user query contains MULTIPLE INDEPENDENT conditions connected by AND, so CNDN_SEQ is REQUIRED.
+
+# You MUST:
+# 1) In ## Steps, include EXACTLY:
+# 1. CNDN_SEQ
+
+# 2) Create a ## Conditions section with exactly:
+# ### CNDN_SEQ
+
+# 3) Under ### CNDN_SEQ, write one logic block per independent check using this shape:
+# - ↳ (CNDN_LGC) <condition>:
+#   ↳ <EVNT_* ...>
+
+# 4) DO NOT write any freeform "IF ... THEN ..." lines in ## Steps.
+
+# If you violate any rule above, your output is invalid.
+# """
+
+#     if has_dom_language(user_query) and not _has_explicit_branching(user_query) and not _has_seq_language(user_query):
+#         final_prompt += """
+
+# ---
+# DOMINO CASCADING CONDITION ENFORCEMENT (HARD RULES)
+
+# The user query contains cascading checks (first check / if not then / else check if / if fails),
+# so CNDN_DOM is REQUIRED.
+
+# You MUST:
+# 1) In ## Steps, include EXACTLY:
+#     1. CNDN_DOM
+
+# 2) Create a ## Conditions section with one CNDN_LGC_DOM container per sequential condition.
+
+# 3) Under each ### CNDN_LGC_DOM container, follow this shape:
+#     - IF: ↳ <EVNT_* ...>
+#     - ELSE: ↳ route to next container or → END
+
+# 4) DO NOT write any freeform "IF ... THEN ..." lines in ## Steps.
+
+# If you violate any rule above, your output is invalid.
+# """
+
+    # ---- LOOP DEDUPE ENFORCEMENT (topic-based; no keyword detection) ----
+    if "loops" in topics:
         final_prompt += """
 
 ---
-BRANCHING ENFORCEMENT (HARD RULES)
+LOOPS ENFORCEMENT (HARD RULES)
 
-The user query contains an explicit ELSE/OTHERWISE/UNLESS, so branching is REQUIRED.
+The router selected the "loops" topic, so repetition is REQUIRED.
 
 You MUST:
-1) Use ## Conditions with exactly one ### CNDN_BIN.
-2) Include BOTH branches:
-- IF TRUE: ↳ <EVNT_* ...>
-- IF FALSE: ↳ <EVNT_* ...>
-3) In ## Steps, do NOT write any freeform "IF ..." text.
-- ## Steps must contain ONLY numbered codes.
-- For this case, ## Steps must be:
-    1. CNDN_BIN
+1) Include a ## Loops section.
+2) Express the repetition count explicitly:
+   - If the query says "N times" or "repeat N", the loop MUST include count: N.
+3) Format inside ## Loops with NO numbered lines:
+   - Use ONLY bullet format:
+     - EVNT_LOOP_FOR (count: N)
+       ↳ INSIDE LOOP: <EVNT_* ...>
+4) DO NOT repeat the looped action in ## Steps.
+5) If there are no top-level steps outside loops, OMIT the ## Steps section entirely.
 
 If you violate any rule above, your output is invalid.
+
 """
 
-    if _has_seq_language(user_query) and not _has_explicit_branching(user_query):
+    if "conditions" in topics:
         final_prompt += """
 
----
-SEQUENCE CONDITION ENFORCEMENT (HARD RULES)
+    ---
+    CONDITIONS ENFORCEMENT (HARD RULES)
 
-The user query contains MULTIPLE INDEPENDENT conditions connected by AND, so CNDN_SEQ is REQUIRED.
+    The router selected the "conditions" topic, so conditional logic is REQUIRED.
 
-You MUST:
-1) In ## Steps, include EXACTLY:
-1. CNDN_SEQ
+    You MUST:
+    1) Include a ## Conditions section with exactly ONE of:
+    - ### CNDN_BIN  (if/else branching)
+    - ### CNDN_SEQ  (parallel independent checks)
+    - ### CNDN_DOM  (cascading fallback checks)
 
-2) Create a ## Conditions section with exactly:
-### CNDN_SEQ
-
-3) Under ### CNDN_SEQ, write one logic block per independent check using this shape:
-- ↳ (CNDN_LGC) <condition>:
-  ↳ <EVNT_* ...>
-
-4) DO NOT write any freeform "IF ... THEN ..." lines in ## Steps.
-
-If you violate any rule above, your output is invalid.
-"""
-
-    if has_dom_language(user_query) and not _has_explicit_branching(user_query) and not _has_seq_language(user_query):
-        final_prompt += """
-
----
-DOMINO CASCADING CONDITION ENFORCEMENT (HARD RULES)
-
-The user query contains cascading checks (first check / if not then / else check if / if fails),
-so CNDN_DOM is REQUIRED.
-
-You MUST:
-1) In ## Steps, include EXACTLY:
+    2) ## Steps must contain ONLY the condition code (and nothing else):
+    1. CNDN_BIN   OR
+    1. CNDN_SEQ   OR
     1. CNDN_DOM
 
-2) Create a ## Conditions section with one CNDN_LGC_DOM container per sequential condition.
+    3) Do NOT include EVNT_* actions as numbered Steps when they appear inside ## Conditions.
+    (No duplication between ## Steps and ## Conditions.)
 
-3) Under each ### CNDN_LGC_DOM container, follow this shape:
-    - IF: ↳ <EVNT_* ...>
-    - ELSE: ↳ route to next container or → END
+    If you violate any rule above, your output is invalid.
 
-4) DO NOT write any freeform "IF ... THEN ..." lines in ## Steps.
+    If the query is only checks (no explicit action like email/sms/create/update/etc), then the branches route to END (or “continue”), and do not invent notifications.
 
-If you violate any rule above, your output is invalid.
-"""
+    Example expectation:
+
+    CNDN_DOM containers:
+
+    IF quota ok → END
+
+    ELSE → check plan
+
+    IF plan ok → END
+
+    ELSE → END
+
+
+    """
+
 
     # ✅ PRINT timings always (works with your current print-based runner)
     timings["assembler_total_s"] = asm_timer.elapsed()

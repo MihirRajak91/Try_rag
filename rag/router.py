@@ -69,9 +69,9 @@ USER_ROLE_PHRASES = {"assign role", "role assignment", "assign roles"}
 # -------------------------------------------------------------------
 # Pair preferences (NO KEYWORDS): winner -> preferred secondary topics
 # -------------------------------------------------------------------
-PAIR_PREFERENCES = {
-    "notifications_intent": {"conditions"},
-}
+# PAIR_PREFERENCES = {
+#     "notifications_intent": {"conditions"},
+# }
 
 
 class _Timer:
@@ -324,6 +324,10 @@ def route_topics(query: str, debug: bool = True) -> Tuple[List[str], Dict[str, f
 
     scored.sort(key=lambda x: x["centroid_dist"])
 
+    if debug:
+        print("[router] scored_topics:", [(s["topic"], round(s["centroid_dist"], 4)) for s in scored[:8]])
+
+
     # priority tie-break, but don't let stop-early jump as runner-up
     for i in range(len(scored) - 1):
         a = scored[i]
@@ -355,7 +359,28 @@ def route_topics(query: str, debug: bool = True) -> Tuple[List[str], Dict[str, f
     ):
         allowed_topics.append("conditions")
 
-    # Secondary selection with ambiguity gate + pair preference
+    # # Secondary selection with ambiguity gate + pair preference
+    # if winner["topic"] not in STOP_EARLY_TOPICS and MAX_ALLOWED_TOPICS > 1:
+    #     candidates = [s for s in scored[1:] if s["topic"] not in STOP_EARLY_TOPICS]
+    #     if candidates:
+    #         runner_up = candidates[0]
+    #         abs_gap_amb = runner_up["centroid_dist"] - winner["centroid_dist"]
+    #         rel_gap_amb = runner_up["centroid_dist"] / max(winner["centroid_dist"], 1e-9)
+
+    #         if abs_gap_amb <= SECONDARY_AMBIGUITY_ABS_MAX and rel_gap_amb <= SECONDARY_AMBIGUITY_REL_MAX:
+    #             preferred = PAIR_PREFERENCES.get(winner["topic"], set())
+    #             preferred_candidates = [s for s in candidates if s["topic"] in preferred]
+    #             other_candidates = [s for s in candidates if s["topic"] not in preferred]
+    #             ordered = preferred_candidates + other_candidates
+
+    #             for s in ordered:
+    #                 abs_gap = s["centroid_dist"] - winner["centroid_dist"]
+    #                 rel_gap = s["centroid_dist"] / max(winner["centroid_dist"], 1e-9)
+    #                 if abs_gap <= ROUTER_MAX_ABS_GAP and rel_gap <= ROUTER_MAX_REL_GAP:
+    #                     allowed_topics.append(s["topic"])
+    #                     break
+    
+    # Secondary selection with ambiguity gate (NO pair preference)
     if winner["topic"] not in STOP_EARLY_TOPICS and MAX_ALLOWED_TOPICS > 1:
         candidates = [s for s in scored[1:] if s["topic"] not in STOP_EARLY_TOPICS]
         if candidates:
@@ -364,17 +389,13 @@ def route_topics(query: str, debug: bool = True) -> Tuple[List[str], Dict[str, f
             rel_gap_amb = runner_up["centroid_dist"] / max(winner["centroid_dist"], 1e-9)
 
             if abs_gap_amb <= SECONDARY_AMBIGUITY_ABS_MAX and rel_gap_amb <= SECONDARY_AMBIGUITY_REL_MAX:
-                preferred = PAIR_PREFERENCES.get(winner["topic"], set())
-                preferred_candidates = [s for s in candidates if s["topic"] in preferred]
-                other_candidates = [s for s in candidates if s["topic"] not in preferred]
-                ordered = preferred_candidates + other_candidates
-
-                for s in ordered:
+                for s in candidates:
                     abs_gap = s["centroid_dist"] - winner["centroid_dist"]
                     rel_gap = s["centroid_dist"] / max(winner["centroid_dist"], 1e-9)
                     if abs_gap <= ROUTER_MAX_ABS_GAP and rel_gap <= ROUTER_MAX_REL_GAP:
                         allowed_topics.append(s["topic"])
                         break
+
 
     allowed_topics = [t for t in allowed_topics if t and t not in DISALLOWED_OUTPUT_TOPICS]
     allowed_topics = allowed_topics[:MAX_ALLOWED_TOPICS]

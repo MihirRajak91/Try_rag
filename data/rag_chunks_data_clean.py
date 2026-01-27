@@ -443,6 +443,8 @@ DO NOT include ANY condition (CNDN_BIN, CNDN_SEQ, CNDN_DOM) for:
 - "where" in data queries = Filter criteria → NO condition needed (handled by event)
 - "when" in direct actions (delete when, update when) = Built-in filter → NO condition needed
 
+
+
 """
 }
 
@@ -955,6 +957,10 @@ HARD FORMAT RULES (non-negotiable):
 - If the query uses "if/when/where" ONLY to select which records to act on (filtering),
   DO NOT use ## Conditions; encode it as Match/Filter fields inside the EVNT_* step(s).
 
+LOOP DEDUPE RULE:
+- If the workflow includes a ## Loops section, do NOT repeat the looped action in ## Steps.
+- ## Steps should only list top-level events that are NOT inside loops.
+
 Use this template (omit sections that are not needed):
 
 ## Trigger
@@ -1273,6 +1279,37 @@ If query has NO explicit user action verb and is only about departments/roles, c
 """,
 }
 
+PROMPT_LOOPS_ROUTER = {
+    "doc_type": "RULE",
+    "topic": "loops",
+    "priority": 90,
+    "role": "router",
+    "data": """
+ROUTER.RULE.loops
+Intent: repetition / iteration.
+Signals: times, x times, repeat, for each, for every, loop, iterate, from 1 to N.
+Output: MUST use ## Loops with EVNT_LOOP_FOR/WHILE/DOWHILE.
+Hard rule: never encode repetition as params on EVNT_NOTI_* or EVNT_RCRD_* (no times=...).
+""",
+    "text": """Use when query requires repetition. Use EVNT_LOOP_* and put actions INSIDE LOOP."""
+}
+
+PROMPT_CONDITIONS_ROUTER_STRONG = {
+  "doc_type": "RULE",
+  "topic": "conditions",
+  "priority": 160,
+  "role": "router",
+  "data": """
+ROUTER.RULE.conditions_strong
+Intent: branching decisions with TRUE/FALSE paths.
+Patterns: if/then/else, otherwise, unless, if not then, else check if, and check if.
+Output: CNDN_BIN / CNDN_SEQ / CNDN_DOM.
+""",
+  "text": PROMPT_COND_OVERVIEW_AND_PATTERNS["text"],  # <— reuse existing full rules
+}
+
+
+
 
 
 
@@ -1307,6 +1344,7 @@ LAYER4_ACTIONS_BUILTIN_FILTERING = [
 LAYER5_CONDITIONS = [
     PROMPT_COND_OVERVIEW_AND_PATTERNS,
     PROMPT_CONDITIONS_SUPPORT,
+    PROMPT_CONDITIONS_ROUTER_STRONG,
 ]
 
 LAYER6_NOTIFICATIONS = [
@@ -1315,8 +1353,10 @@ LAYER6_NOTIFICATIONS = [
 ]
 
 LAYER7_LOOPS = [
+    PROMPT_LOOPS_ROUTER,
     PROMPT_LOOPS_TYPES,
 ]
+
 
 LAYER8_TRIGGER_CATALOG = [
     PROMPT_TRIGGERS_CATALOG,
