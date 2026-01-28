@@ -1,0 +1,13 @@
+if status is approved send email else send notification
+send sms notification when a record is created
+create a record where status is active
+update records where status is expired and set status to archived
+delete the record where status is inactive
+duplicate records where value > 100
+restore the record where status is archived
+check if status is approved and if amount > 1000 then send email and send alert
+first check if status is low then email, if not then check if status is medium then notify
+repeat 3 times send an email notification to the admin
+create a new user account and assign role admin
+notify me when a record is updated
+get records where status is active

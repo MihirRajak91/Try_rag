@@ -433,6 +433,71 @@ def assemble_prompt(
 
 # If you violate any rule above, your output is invalid.
 # """
+    if "conditions" in topics:
+        final_prompt += """
+
+---
+CONDITIONS ENFORCEMENT (HARD RULES)
+
+You MUST output a Markdown plan with these EXACT section headers (including the ## symbols):
+## Trigger
+## Start
+## Steps
+## Conditions
+## End
+
+Under each section, you MUST follow these exact rules:
+
+- Under ## Trigger:
+  - Output EXACTLY one bullet line in this format:
+    - TRG_*
+
+- Under ## Start:
+  - Output EXACTLY:
+    - Start
+  - Do NOT write condition checks or logic here.
+
+- Under ## End:
+  - Output EXACTLY:
+    - End
+
+
+If conditional logic is required, you MUST:
+1) In ## Steps, output EXACTLY ONE line:
+1. CNDN_BIN   OR  1. CNDN_SEQ   OR  1. CNDN_DOM
+
+2) In ## Conditions, output EXACTLY ONE matching subheader (including ###):
+### CNDN_BIN  OR  ### CNDN_SEQ  OR  ### CNDN_DOM
+
+3) Do NOT repeat any EVNT_* in ## Steps if it appears in ## Conditions.
+
+CNDN_SEQ FORMAT (REQUIRED):
+### CNDN_SEQ
+- Logic Block 1:
+  ↳ IF TRUE: <EVNT_* ...>
+  ↳ IF FALSE: Route to END
+- Logic Block 2:
+  ↳ IF TRUE: <EVNT_* ...>
+  ↳ IF FALSE: Route to END
+
+CNDN_BIN FORMAT (REQUIRED):
+### CNDN_BIN
+- IF TRUE:
+  ↳ <EVNT_* ...>
+- IF FALSE:
+  ↳ <EVNT_* ...> OR Route to END
+
+CNDN_DOM FORMAT (REQUIRED):
+### CNDN_DOM
+- Container 1:
+  ↳ IF TRUE: <EVNT_* ...>
+  ↳ IF FALSE: Route to Container 2
+- Container 2:
+  ↳ IF TRUE: <EVNT_* ...>
+  ↳ IF FALSE: Route to END
+
+If you violate any rule above, the output is invalid.
+"""
 
     # ---- LOOP DEDUPE ENFORCEMENT (topic-based; no keyword detection) ----
     if "loops" in topics:

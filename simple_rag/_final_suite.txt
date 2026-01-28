@@ -1,0 +1,12 @@
+if status is approved send email else send notification
+repeat 3 times send an email notification to the admin
+notify me when a record is updated
+create a record where status is active
+update record where status is active
+delete the record where status is inactive
+get records where status is active
+add new department science
+update record where department is Science
+delete a record where role is Teacher
+duplicate the record where department is management
+restore a record where department is management

@@ -15,18 +15,39 @@ PROMPT_ACTION_EVENTS_BUILTIN_FILTERING = {
     "topic": "actions_builtin_filtering",
     "priority": 120,
     "role": "router",
-"data": """
-ROUTER.RULE.actions_builtin_filtering | doc_type=RULE | role=router | priority=120
-Signature: WHERE_SELECTION_PREDICATE; ROW_MATCHING; TARGET_ROWS
+    "data": """
+ROUTER.RULE.actions_builtin_filtering
 
-where <predicate>; when <predicate>; only rows where; records with <field=value>
-filter rows; matching records; select matching entries; apply to records where
-status=; amount>; date between; tag=; archived=true
-update records where; delete records where; create record where; duplicate record where; restore record where
-update record where status is active; update record where department is Science
+Intent: Perform a NON-user-account UPDATE/CHANGE operation on system entities
+(records/forms/tasks/workflow fields). This is for ACTION execution, not messaging.
 
-ref:actions_builtin_filtering#router
+MUST HAVE (hard requirement):
+- An explicit action verb requesting a change, such as:
+  update / change / set / modify / mark / move / close / complete / cancel
 
+APPLIES TO (objects being changed):
+- record fields (especially status/state/stage)
+- task status/state
+- workflow step/state
+- process stage
+- form status/fields
+
+HIGH-CONFIDENCE ACTION EXAMPLES:
+- update the record status to Done
+- change task status from In Progress to Completed
+- set workflow state to Approved
+- mark the task as Closed
+- move the record to stage Qualified
+- modify the form field value
+
+FILTERING (built-in selection criteria; still action intent):
+- update records WHERE <condition>
+- change status WHEN <condition>
+- set <field>=<value> for matching records
+
+HARD EXCLUSION:
+- If the primary intent is sending a message/notification (email/sms/notify/alert/push/webhook),
+  route to notifications_intent unless there is ALSO an explicit update/change/set/mark instruction.
 """,
     "text": """SIMPLE WHERE FILTER RULE (NO CONDITIONS):
 - If the query uses "where/when" only to identify which records to act on (e.g., "where status is active"),
@@ -167,52 +188,10 @@ PROMPT_ACTION_EVENTS_BUILTIN_FILTERING_SUPPORT = {
     "topic": "actions_builtin_filtering",
     "priority": 90,
     "role": "support",
-"data": """
-SUPPORT.RULE.actions_builtin_filtering | doc_type=RULE | role=support | priority=90
-Signature: DIRECT_RECORD_ACTION; BUILTIN_WHERE_FILTER; NO_EXTRA_FILTER_STEP
-
-Purpose:
-Map user phrasing to direct record action events that include internal record selection via where/when predicates.
-
-Primary outputs (direct action events):
-EVNT_RCRD_ADD (create record)
-EVNT_RCRD_UPDT (update/modify record)
-EVNT_RCRD_DEL (delete/remove record)
-EVNT_RCRD_DUP (duplicate/copy record)
-EVNT_RCRD_REST (restore/unarchive record)
-
-Key constraint:
-- These events include built-in record filtering; do not pair with EVNT_RCRD_INFO or EVNT_FLTR.
-- Prefer emitting ONLY the action event when the request is a direct record action over selected rows.
-
-Action detection triggers (safe):
-create record; add record; new record; insert record
-update record; modify record; change field; set status
-delete record; remove record
-duplicate record; copy record; clone record
-restore record; unarchive record
-
-Where/when usage:
-- Patterns: "ACTION ... where <predicate>" / "ACTION ... when <predicate>" / "ACTION ... for rows where <predicate>"
-- Predicate applies to selecting target rows for the action.
-
-Create-vs-update disambiguation (high-signal):
-If query starts with "create" OR contains "create a record" → ALWAYS EVNT_RCRD_ADD (never EVNT_RCRD_UPDT), even if phrasing contains "to".
-
-Masked mixed-intent note (no competitor tokens):
-If query combines a record action AND an outbound-message intent → allow SECONDARY topic = notifications_intent.
-Use label: OUTBOUND_MESSAGE_INTENT (do not key on channel words here).
-
-Examples (kept channel-neutral):
-- "create a record in <entity> where fee charged between 2500 and 3000" → EVNT_RCRD_ADD
-- "delete records where status = expired" → EVNT_RCRD_DEL
-- "duplicate records where value > 100" → EVNT_RCRD_DUP
-- "update records where tier = gold; set status = done" → EVNT_RCRD_UPDT
-- "update status and perform OUTBOUND_MESSAGE_INTENT" → action event + allow notifications_intent secondary
-
-ref:actions_builtin_filtering#support
-"""
-,
+    "data":  """
+SUPPORT.RULE.actions_builtin_filtering
+Use when the workflow needs full rules and examples for direct record actions.
+""",
 
     "text": """CRITICAL: Action Events with Built-in Filtering
 
@@ -221,8 +200,9 @@ Use Direct Action Events (NO additional retrieve/filter needed) for:
 EVNT_RCRD_ADD (Create a Record):
 - Keywords: "create a record", "add a record", "create record of [entity]"
 - Pattern: "create [a] record of [entity] where [conditions]"
+- For complex create operations with conditions, use CNDN_BIN + EVNT_RCRD_ADD
 - Examples:
-  - "create a record in enrollment tracking where fee charged is 2500 to fee charged 3000" → EVNT_RCRD_ADD ONLY
+  - "create a record in enrollment tracking where fee charged is 2500 to fee charged 3000" → CNDN_BIN + EVNT_RCRD_ADD (binary condition evaluates the complex fee logic)
 
 EVNT_RCRD_DUP (Duplicate a Record):
 - Keywords: "duplicate the record", "duplicate record of [entity]"
@@ -250,8 +230,9 @@ EVNT_RCRD_DEL (Delete a Record):
 EVNT_RCRD_UPDT (Update a Record):
 - Keywords: "update the record", "update record of [entity]", "modify the record"
 - Pattern: "update [the] record of [entity]"
+- For update operations with conditions, use CNDN_BIN + EVNT_RCRD_UPDT
 - Examples:
-  - "update a record in enrollment tracking where fee charged is 2500 to fee charged 3000" → EVNT_RCRD_UPDT ONLY
+  - "update a record in enrollment tracking where fee charged is 2500 to fee charged 3000" → CNDN_BIN + EVNT_RCRD_UPDT (binary condition evaluates "where fee charged is 2500")
 
 MIXED ACTION + NOTIFICATION (include BOTH topics):
 - update the record status to done and email the admin
@@ -262,9 +243,10 @@ Rule: when a query contains BOTH an action (update/change/set status) AND a mess
 the router should allow notifications_intent as a secondary topic.
 
 ⚠️ CRITICAL RULE:
-- DO NOT combine these action events with EVNT_RCRD_INFO, EVNT_FLTR, or CNDN_BIN
+- DO NOT combine these action events with EVNT_RCRD_INFO, EVNT_FLTR, or CNDN_BIN (except for complex create operations)
 - Each action event handles its own record selection and filtering internally
 - Use ONLY the action event when the query is a direct action on records
+- CREATE operations with complex conditions may need CNDN_BIN, CNDN_SEQ, CNDN_DOM for condition evaluation
 
 CRITICAL ACTION DETECTION RULE:
 If a query starts with "create" or contains "create a record", it is ALWAYS a CREATE operation (EVNT_RCRD_ADD), never an UPDATE operation, regardless of other words like "to" in the query.
@@ -276,18 +258,33 @@ PROMPT_NOTIFICATIONS_INTENT = {
     "topic": "notifications_intent",
     "priority": 140,
     "role": "router",
-"data": """
-ROUTER.RULE.notifications_intent | doc_type=RULE | role=router | priority=140
-Signature: OUTBOUND_MESSAGE; SEND_MESSAGE; NOTIFICATION_CHANNELS
+    "data": """
+ROUTER.RULE.notifications_intent
+Intent: send a message/notification to a recipient.
 
-notify; notification; alert; message; send message
-email; mail; sms; text; ping; remind; dm
-slack; teams; whatsapp; webhook; push
+Signals: email, mail, notify, notification, alert, sms, text message, push, webhook.
+Recipient signals: admin, user, owner, manager, team, assignee.
 
-ref:notifications_intent#router
-"""
+High-confidence matches (notification is the primary action):
+- email the admin when a record is updated
+- email admin when a record is updated
+- send email to admin when a record is updated
+- notify the admin when a record changes
+- notify admin when status changes
+- sms the admin when a record is updated
+- text admin when status changes
+- send an alert when record is modified
+- push notification when task status changes
+- webhook when a form record is edited
 
-,
+Mixed intent:
+If the query includes BOTH:
+- a record/task/form/workflow update action AND
+- a notification action (email/sms/notify/alert)
+then notifications_intent may appear as a secondary topic (actions_builtin_filtering can still be primary).
+
+Output: select EVNT_NOTI_* event family (exact mapping handled by agent/backstory).
+""",
     "text": """Use when the user request is primarily about sending a notification/message.
 Do not use for record CRUD, loops, or computations.
 
@@ -301,39 +298,29 @@ PROMPT_NOTIFICATIONS_SUPPORT = {
     "topic": "notifications_intent",
     "priority": 140,
     "role": "support",
-"data": """
-SUPPORT.RULE.notifications_intent | doc_type=RULE | role=support | priority=140
-Signature: OUTBOUND_MESSAGE_INTENT; CHANNEL_TO_EVENT_MAPPING; EVNT_NOTI_*
+    "data": """
+ SUPPORT.RULE.notifications_intent
 
-Task:
-Map an outbound message/notification request to the correct EVNT_NOTI_* event and fill required slots.
+Map intent to the correct EVNT_NOTI_* event:
 
-Channel mapping keywords → event:
-EMAIL_CHANNEL → EVNT_NOTI_MAIL
-SMS_CHANNEL → EVNT_NOTI_SMS
-SYSTEM_NOTIFICATION_CHANNEL → EVNT_NOTI_NOTI
-PUSH_CHANNEL → EVNT_NOTI_PUSH
-WEBHOOK_CHANNEL → EVNT_NOTI_WBH
+- Email → EVNT_NOTI_MAIL
+- SMS/Text → EVNT_NOTI_SMS
+- System notification → EVNT_NOTI_NOTI
+- Push → EVNT_NOTI_PUSH
+- Webhook → EVNT_NOTI_WBH
 
-Canonical channel tokens (only these):
-EMAIL_CHANNEL: email, mail, gmail
-SMS_CHANNEL: sms, text message, txt
-SYSTEM_NOTIFICATION_CHANNEL: system notification, in-app notification
-PUSH_CHANNEL: push notification
-WEBHOOK_CHANNEL: webhook, callback url, http endpoint
+Hard rule:
+- NEVER output EVNT_NOTI_EMAIL
+- ALWAYS use EVNT_NOTI_MAIL for email notifications
 
-Required fields:
-recipient (or resolve step); message content (subject/body/message); optional trigger phrase (when/on/if)
+If recipient is not specified:
+- treat "admin" as a valid notification recipient role
+- OR add a resolve-recipient step
 
-Missing-info rules:
-- If recipient missing → add RESOLVE_RECIPIENT (name→user lookup) or placeholder recipient
-- If content missing → add placeholders for subject/body/message
- - If no channel is specified, default to SYSTEM_NOTIFICATION_CHANNEL → EVNT_NOTI_NOTI
- - Use ONLY ONE EVNT_NOTI_* unless the user explicitly asks for multiple channels
+If subject/body not given:
+- include placeholders
 
-ref:notifications_intent#support
 """
-
 ,
     "text": """Use when the user request is primarily about sending a notification/message.
 Map intent to the correct EVNT_NOTI_* event:
@@ -357,30 +344,10 @@ PROMPT_DATA_OPS_RULES = {
     "topic": "data_ops_rules",
     "priority": 80,
     "role": "router",
-"data": """
-ROUTER.RULE.data_ops_rules | doc_type=RULE | role=router | priority=80
-Signature: EVNT_DATA_OPR; DATA_TRANSFORM; FORMULA_CALC; FIELD_DERIVATION
-
-Select when:
-User intent is to compute/derive/transform values (numbers, text, dates) or generate values, i.e., a formula-like operation.
-
-Core operations (high-signal, low-leak):
-- arithmetic: calculate, compute, total, sum, percentage, multiply, divide, difference
-- string ops: lowercase, uppercase, trim, concatenate, split, replace, extract, regex
-- date/time ops: format date, add/subtract days, weekday, timezone conversion
-- generation: random value, uuid, sequence, otp/code
-- normalization: round, type conversion, clean/format
-
-Output:
-EVNT_DATA_OPR
-
-Notes (kept embedding-safe):
-- This rule is about value transformation/derivation, not selecting records via where/when.
-- Use when a field/value must be computed before storing/using it.
-
-ref:data_ops_rules#router
-"""
-,
+    "data": """ROUTER.RULE.data_ops_rules
+Intent: compute/transform/derive a value or reshape data.
+Signals: calculate, compute, sum, total, percentage, concat, uppercase/lowercase, split, replace, regex, format date, add days, round, uuid, random.
+Output: use EVNT_DATA_OPR.""",
 
     "text": """STEP X: Formula / Calculation Detection (EVNT_DATA_OPR)
 Use EVNT_DATA_OPR when the user wants to:
@@ -439,32 +406,10 @@ PROMPT_DATA_OPS_SUPPORT = {
     "topic": "data_ops_rules",
     "priority": 80,
     "role": "support",
-"data": """
-SUPPORT.RULE.data_ops_rules | doc_type=RULE | role=support | priority=80
-Signature: EVNT_DATA_OPR; VALUE_DERIVATION; TRANSFORM_FUNCTIONS; FORMULA_ENGINE
-
-Task:
-When intent is value computation/transformation, emit EVNT_DATA_OPR and describe the operation(s) as functions.
-
-Operation families (high-signal):
-- numeric: add, subtract, multiply, divide, power, percent, sum/total, difference, round, abs
-- string: lowercase, uppercase, capitalize, trim, concatenate/join, split, replace, extract, regex
-- date/time: parse/format date, add/subtract days, weekday, timezone convert
-- generation: random number/string, uuid, sequence, code/otp
-- type/cleaning: cast/convert type, normalize, sanitize
-
-Expected EVNT_DATA_OPR slots:
-- inputs: source fields/values
-- ops: ordered list of transforms (function names + parameters)
-- output: target field/value name
-
-Guidance:
-- Use EVNT_DATA_OPR for computed/derived values and normalization.
-- Keep this event scoped to value transformation; avoid adding unrelated event families unless explicitly requested.
-
-ref:data_ops_rules#support
-"""
-,
+    "data": """
+SUPPORT.RULE.data_ops_rules
+Use when the workflow needs full data operation guidance, triggers, and examples.
+""",
 
     "text": """STEP X: Formula / Calculation Detection (EVNT_DATA_OPR)
 Use EVNT_DATA_OPR when the user wants to:
@@ -513,41 +458,26 @@ PROMPT_COND_OVERVIEW_AND_PATTERNS = {
     "topic": "conditions",
     "priority": 100,
     "role": "router",
-"data": """
-ROUTER.RULE.conditions | doc_type=RULE | role=router | priority=100
-Signature: CONDITION_BRANCHING; CNDN_BIN; CNDN_SEQ; CNDN_DOM
+    "data": """ROUTER.RULE.conditions
+Intent: conditional BRANCHING with mutually exclusive paths.
 
-Select when:
-User intent includes conditional decision logic with different paths or multiple conditional checks.
+Signals (branching ONLY):
+- if ... then ... else ...
+- otherwise
+- unless
+- if not
+- else check
+- first check ... if not ...
 
-Do NOT select for:
-- where/when record filtering (built-in action filtering)
-- create/update/delete/duplicate/restore records with simple where predicates
-- data retrieval filtering (JMES/Filter)
-- sequential actions without branching
+NOT conditions:
+- temporal phrases ("when X happens")
+- record filters ("update when status = X")
+- triggers or timing
+- built-in filtering
 
-Condition type patterns (router cues only):
-CNDN_DOM (cascading / fallback chain):
-- cues: if not then; else check if; if fails; first check ... if not; try X then Y then Z (fallback)
-
-CNDN_SEQ (multiple independent checks in one request):
-- cues: AND check if; and verify if; verify A AND verify B; multiple checks each tied to its own outcome
-
-CNDN_BIN (single binary decision):
-- cues: if X then Y; if X then Y else Z; when X then Y (single check with true/false outcome)
-Examples (signals):
-- if status is approved send email else send notification
-- if X then email else notify
-
-Output:
-Choose one of: CNDN_BIN / CNDN_SEQ / CNDN_DOM (and associated logic blocks)
-
-Notes:
-This rule is about branching/conditional logic patterns, not value computation and not record selection predicates.
-
-ref:conditions#router
-"""
-,
+Only use when the workflow must choose between TRUE vs FALSE paths.
+Output: CNDN_BIN / CNDN_SEQ / CNDN_DOM.
+""",
 
     "text": """⚠️⚠️⚠️ CRITICAL: CONDITION TYPE DETECTION ⚠️⚠️⚠️
 
@@ -729,37 +659,10 @@ PROMPT_CONDITIONS_SUPPORT = {
     "topic": "conditions",
     "priority": 100,
     "role": "support",
-"data": """
-SUPPORT.RULE.conditions | doc_type=RULE | role=support | priority=100
-Signature: CNDN_BIN; CNDN_SEQ; CNDN_DOM; FLOW_SEQUENCE_FORMAT; CONDITION_CONTAINERS
-
-Task:
-When a condition type is chosen, describe the workflow plan structure and required branches/blocks for that condition.
-
-Outputs:
-CNDN_BIN / CNDN_SEQ / CNDN_DOM
-Logic blocks: CNDN_LGC (for BIN/SEQ), CNDN_LGC_DOM (for DOM containers)
-
-Minimal pattern cues (no examples, no other event families):
-- CNDN_BIN: single conditional check with TRUE/FALSE outcomes (explicit or implicit else-to-end)
-- CNDN_SEQ: 2+ independent checks connected as parallel/sequence checks, each in its own logic block
-- CNDN_DOM: cascading fallback chain where a failed check routes to the next container
-
-Flow Sequence requirements:
-- Always include both branches for CNDN_BIN:
-  IF TRUE: <action placeholder> → END
-  IF FALSE: <action placeholder or route to END> → END
-- For CNDN_SEQ: include N logic blocks; each block is an independent check → its outcome
-- For CNDN_DOM: include ordered containers; each container routes to next on failure; final failure routes to END
-
-Formatting constraints:
-- The workflow plan is NOT JSON.
-- Show ordered steps: Trigger → Start → Condition → End.
-- Use placeholders for actions/events inside branches if action details come from other topics.
-
-ref:conditions#support
-"""
-,
+    "data": """
+SUPPORT.RULE.conditions
+Use when the workflow needs full condition patterns, branching rules, and examples.
+""",
 
     "text": """⚠️⚠️⚠️ CRITICAL: CONDITION TYPE DETECTION ⚠️⚠️⚠️
 
@@ -939,46 +842,11 @@ PROMPT_LOOPS_TYPES = {
     "topic": "loops",
     "priority": 70,
     "role": "support",
-"data": """
-SUPPORT.RULE.loops | doc_type=RULE | role=support | priority=70
-Signature: EVNT_LOOP_FOR; EVNT_LOOP_WHILE; EVNT_LOOP_DOWHILE; LOOP_CONTROL; LOOP_FORMAT
-
-Task:
-Detect repetition/iteration intent and map to correct loop event type; format loop blocks in the workflow plan.
-
-Example signals (for retrieval):
-- repeat N times send email
-- repeat 3 times send a notification
-- run this N times
-
-Loop type mapping:
-- EVNT_LOOP_FOR: iterate over a collection OR repeat N times / range iteration
-  cues: for each; for every; iterate; process all; loop from X to Y; repeat N times; repeat 3 times; run N times
-- EVNT_LOOP_WHILE: pre-check loop (condition evaluated before each iteration)
-  cues: while; as long as; until <state changes> (pre-check phrasing)
-- EVNT_LOOP_DOWHILE: post-check loop (executes at least once then checks)
-  cues: do once then check; execute at least once; run then verify
-- EVNT_LOOP_BREAK: exit loop early
-  cues: break; stop loop; exit loop
-- EVNT_LOOP_CONTINUE: skip iteration
-  cues: skip this; continue; next iteration
-
-Formatting rules (loops-only):
-- Top-level: Trigger → Start → Loop Start (EVNT_LOOP_*) → Loop End → End
-- Loop internals: use "↳ INSIDE LOOP:" lines (never numbered)
-- Never number items inside a loop.
-- Loop End is a top-level numbered step.
-
-Nesting rule (placeholder-safe):
-- If repetition appears inside a branch block, the loop must be nested inside that branch (not as a separate top-level step).
-
-Not loops:
-- Numeric comparisons or filters (e.g., value > 100, amount <= 50, where status = active)
-- Thresholds or ranges used to select records
-
-ref:loops#support
+    "data": """SUPPORT.RULE.loops
+Intent: repetition / iteration in workflow.
+Signals: repeat, times, for each, for every, loop, iterate, from X to Y, while, until, do while, break, continue.
+Output: choose EVNT_LOOP_FOR / EVNT_LOOP_WHILE / EVNT_LOOP_DOWHILE (+ EVNT_LOOP_BREAK / EVNT_LOOP_CONTINUE if requested).
 """
-
 ,
     "text": """
 3. Loop Events (EVNT_LOOP_FOR, EVNT_LOOP_WHILE, EVNT_LOOP_DOWHILE):
@@ -1276,32 +1144,11 @@ PROMPT_OUTPUT_CONTRACT = {
     "topic": "output_contract",
     "priority": 90,      # below triggers_rules, above planner_policy
     "role": "support",
-"data": """
-SUPPORT.RULE.output_contract | doc_type=RULE | role=support | priority=90
-Signature: MARKDOWN_OUTPUT_CONTRACT; STRUCTURED_TEMPLATE; SECTION_HEADERS; NUMBERED_STEPS
-
-Purpose:
-Enforce the output format contract: produce a structured workflow plan as raw Markdown, not JSON.
-
-Format triggers:
-workflow plan template; output format; structured plan; markdown sections; section headers; formatting rules; numbered steps; no code fences; no JSON
-
-Template shape (header-only):
-## Trigger
-## Start
-## Steps
-## Conditions
-## Loops
-## End
-
-Step-line constraints (token-neutral):
-- Steps are numbered, single-line items only.
-- No freeform branching sentences inside Steps.
-- Conditional logic and repetition details belong in their dedicated sections, not in Steps.
-
-ref:output_contract#support
-"""
-,
+    "data": """
+SUPPORT.RULE.output_contract
+Intent: enforce the exact Markdown section template of the workflow plan.
+Output: a strict output skeleton the model must follow.
+""",
     "text": """
 OUTPUT CONTRACT (STRUCTURED WORKFLOW PLAN TEMPLATE)
 
@@ -1313,20 +1160,22 @@ HARD FORMAT RULES (non-negotiable):
 - NEVER write freeform "IF ... THEN ..." lines inside ## Steps.
 
 -## Steps must contain ONLY numbered, single-line codes.
--## Steps must contain ONLY numbered, single-line codes.
 
     - If "conditions" topic is selected: Steps MUST be exactly: 1. CNDN_BIN or 1. CNDN_SEQ or 1. CNDN_DOM
-      and MUST NOT list any EVNT_* steps.
     - Otherwise: Steps contains EVNT_* codes only (single-line each).
 
 - Each numbered line in ## Steps MUST be a single line item.
   (No nested bullets, no multiline blocks, no IF/ELSE content.)
 
 - If the query requires branching, use ONLY the ## Conditions section
-  with ### CNDN_BIN / ### CNDN_SEQ / ### CNDN_DOM as appropriate.
+  with ### CNDN_BIN.
 
-- MUST: Never place CNDN_* (or any IF TRUE / IF FALSE blocks)
+- MUST: Never place CNDN_BIN (or any IF TRUE / IF FALSE blocks)
   inside ## Steps.
+  If branching is required:
+  - ## Steps must list ONLY EVNT_* steps.
+  - ALL branching logic must appear ONLY under:
+    ## Conditions → ### CNDN_BIN.
 
 - Use ## Conditions ONLY when there are mutually exclusive TRUE vs FALSE paths (if/else).
 
@@ -1407,28 +1256,10 @@ PROMPT_TRIGGERS_CATALOG = {
     "topic": "triggers_catalog",
     "priority": 40,
     "role": "support",
-"data": """
-SUPPORT.CATALOG.triggers_catalog | doc_type=CATALOG | role=support | priority=40
-Signature: TRIGGER_CODE_LOOKUP; TRG_*; TRIGGER_TYPES
-
-Purpose:
-Lookup and select the correct TRG_* trigger code from common trigger phrasing.
-
-Trigger codes + aliases:
-TRG_API: api trigger, api call, endpoint hit
-TRG_DB: database trigger, record change, db event
-TRG_FILE: file trigger, file uploaded, file created
-TRG_SCH: scheduled trigger, cron, time-based, daily/weekly
-TRG_BTN: ui trigger, button click
-TRG_WBH: webhook trigger, incoming webhook
-TRG_AUTH: authentication trigger, login/logout/password
-TRG_APRVL: approval trigger, ui approval
-TRG_FLD: field entry trigger, form field input
-TRG_OUT: timeout trigger, process timeout
-
-ref:triggers_catalog#support
-"""
-,
+    "data": """
+Trigger Type Selection (TRG_DB / TRG_API / TRG_FILE / TRG_SCH / TRG_BTN / TRG_WBH / TRG_AUTH / TRG_APRVL / TRG_FLD / TRG_OUT)
+Use this when a query needs the correct workflow trigger. Maps user intent to trigger type: database record changes → TRG_DB, API calls → TRG_API, file upload/import → TRG_FILE, scheduled/time-based → TRG_SCH, button/UI click → TRG_BTN, incoming webhook → TRG_WBH, auth events (login/logout/password reset/change) → TRG_AUTH, approval actions → TRG_APRVL, field entry/update in UI → TRG_FLD, and timeouts/expiry → TRG_OUT.
+""",
 
     "text": """
 TRIGGERS LIST
@@ -1460,24 +1291,11 @@ PROMPT_PLANNER_POLICY = {
     "topic": "planner_policy",
     "priority": 80,
     "role": "support",
-"data": """
-SUPPORT.RULE.planner_policy | doc_type=RULE | role=support | priority=80
-Signature: PLANNER_OUTPUT_POLICY; FORMAT_GUIDELINES; MARKDOWN_ONLY; NO_EXTRA_COMMENTARY
-
-Purpose:
-Enforce planner output constraints (format + minimality).
-
-Rules:
-- Output only the structured workflow plan in raw Markdown (no extra commentary).
-- Include only applicable sections; omit unused sections.
-- Maintain sequence order: Trigger → Start → Steps → End.
-- When the query implies alternative paths, include both outcomes in the dedicated logic section.
-- When repetition is required, label repeated execution clearly inside the repetition block.
-- Do not invent additional capabilities beyond what the user asked.
-
-ref:planner_policy#support
-"""
-,
+    "data": """
+SUPPORT.RULE.planner_policy
+Intent: output format + plan writing constraints (Markdown sections, omit unused sections, flow numbering, branch formatting).
+Output: formatting policy only (not event selection).
+""",
   "text": """
   PLANNER OUTPUT POLICY (FORMAT ONLY)
 
@@ -1496,17 +1314,11 @@ PROMPT_TRIGGERS_RULES = {
     "topic": "triggers_rules",
     "priority": 95,
     "role": "support",
-"data": """
-SUPPORT.RULE.triggers_rules | doc_type=RULE | role=support | priority=95
-Signature: TRIGGER_SELECTION; DEFAULT_TRIGGER; TRG_DB_FALLBACK
-
-default trigger; choose trigger; trigger rules
-TRG_DB default; api trigger; file trigger; schedule trigger
-ui button trigger; field entry trigger; webhook trigger; auth trigger; approval trigger; timeout trigger
-
-ref:triggers_rules#support
+    "data": """
+SUPPORT.RULE.triggers_rules
+Intent: choose trigger type deterministically; default TRG_DB if none explicitly specified.
+Output: trigger selection rules (not the trigger catalog list).
 """,
-
     "text": """
 TRIGGER SELECTION RULES (DEFAULT + DECISION TREE)
 
@@ -1546,17 +1358,16 @@ PROMPT_DATA_RETRIEVAL_ROUTER = {
   "topic": "data_retrieval_filtering",
   "priority": 105,   # bump priority above 98 and 100, because it's a core router
   "role": "router",
-"data": """
-ROUTER.RULE.data_retrieval_filtering | doc_type=RULE | role=router | priority=105
-Signature: LIST_QUERY_SEARCH; READ_RETRIEVE; WHERE_FILTERING; FIELD_SELECTION
+  "data": """ROUTER.RULE.data_retrieval_filtering
+Get/List/Show/Retrieve records from an entity/table.
+Examples: "get records from Enrollment Tracking", "list records", "show all records".
+Supports WHERE filters: "where status is enrolled", "where amount > 100".
+Hard exclusions:
+- If the user intent is to create/update/delete/duplicate/restore records, this is NOT data retrieval.
+- Phrases like "create in <entity>", "add in <entity>", "insert into <entity>" indicate record creation (actions_builtin_filtering).
+- "random suitable values" implies generating values for a create action, not retrieval.
 
-get records; list records; show records; fetch records; retrieve records; search records; find records; query records
-where filter; filter records; criteria; constraints; match records; records with field=value; records where field>value
-select fields; return only fields; extract columns; projection; show only column; pick fields
-count records; sort by; order by; group by; aggregate
-ref:data_retrieval_filtering#router
-"""
-,
+""",
 
   "text": """
 Use when the user wants to retrieve/list/search records and/or apply WHERE-style filtering,
@@ -1570,28 +1381,13 @@ PROMPT_DATA_RETRIEVAL_SUPPORT = {
     "topic": "data_retrieval_filtering",
     "priority": 110,
     "role": "support",
- "data": """
-SUPPORT.RULE.data_retrieval_filtering | doc_type=RULE | role=support | priority=110
-Signature: EVNT_RCRD_INFO; EVNT_FLTR; EVNT_JMES; READ_QUERY_PIPELINE
-
-Goal:
-Map read-only record retrieval requests to the correct retrieval events and their typical composition.
-
-Event mapping:
-- EVNT_RCRD_INFO: retrieve/list/show/fetch records from an entity/table
-- EVNT_FLTR: apply where-style filtering criteria to a record set
-- EVNT_JMES: select/extract/project fields/columns from records (field selection)
-
-Common retrieval pipeline (composition):
-EVNT_RCRD_INFO → EVNT_FLTR → EVNT_JMES
-(omit steps that are not requested; for simple filtered retrievals, EVNT_FLTR alone is acceptable)
-
-Keywords (retrieval-only):
-get/list/show/retrieve/search/query records; where filter; criteria; constraints; matching; select fields; extract columns; projection; names/emails/ids
-
-ref:data_retrieval_filtering#support
+"data": """ROUTER.RULE.data_retrieval_filtering
+Intent: retrieve/list/search records from an entity/table (dynamic records) and apply WHERE-style filters.
+Strong signals: get records, list records, show records, retrieve records, find records, search records,
+"from <entity>", "where <field> ...".
+Output: EVNT_RCRD_INFO (retrieve) + EVNT_FLTR (where filtering) + optional EVNT_JMES (field projection).
+Do NOT use for create/update/delete/duplicate/restore.
 """
-
 ,
     "text": """
 DATA RETRIEVAL & FILTERING RULES
@@ -1617,28 +1413,7 @@ PROMPT_USER_MGMT_ROUTER = {
   "topic": "user_mgmt",
   "priority": 135,
   "role": "router",
-  "data": """
-ROUTER.RULE.user_mgmt | doc_type=RULE | role=router | priority=135
-Signature: USER_ACCOUNT_OBJECT; USER_ACCESS_PERMISSIONS; EVNT_USER_MGMT_*
-
-Select when:
-Primary object is a user account / user profile / user access / user permissions / role assignment.
-
-Account actions (high-signal):
-create user; add user; register user; update user details; update user profile
-activate user; deactivate user; enable user; disable user
-grant permission; revoke permission; user access; remove access
-assign role to user; change user role; role assignment
-extend responsibility; add responsibility; assign additional duties; make head of
-
-Output family:
-EVNT_USER_MGMT_ADD; EVNT_USER_MGMT_UPDT; EVNT_USER_MGMT_DEACT; EVNT_USER_MGMT_ASSIGN; EVNT_USER_MGMT_EXTND
-
-ref:user_mgmt#router
-"""
-,
-
-  "text": """
+  "data": """ROUTER.RULE.user_mgmt
 STOP-EARLY.
 Intent: actions on a USER ACCOUNT OBJECT ONLY.
 This topic applies ONLY when the PRIMARY OBJECT being changed is a user account.
@@ -1690,15 +1465,20 @@ This topic does NOT apply to:
 - form status updates
 
 Output: EVNT_USER_MGMT_* family ONLY.
+""",
+  "text": """STEP -1: USER MANAGEMENT DETECTION (HIGHEST PRIORITY - CHECK FIRST)
+...
+"""
 
-STEP -1: USER MANAGEMENT DETECTION (HIGHEST PRIORITY - CHECK FIRST)
+,
+
+    "text": """STEP -1: USER MANAGEMENT DETECTION (HIGHEST PRIORITY - CHECK FIRST)
 
 USER KEYWORD DETECTION:
 - Scan query for: user, users, country, countries, permission, permissions, access, role assignment, role assignments
 - IF ANY USER KEYWORD FOUND: Check if the main action is on users (create, update, deactivate, activate, assign role, extend). If yes, ALWAYS use USER_MGMT events.
 - USER MANAGEMENT EVENTS: EVNT_USER_MGMT_ADD, EVNT_USER_MGMT_UPDT, EVNT_USER_MGMT_DEACT, EVNT_USER_MGMT_ASSIGN, EVNT_USER_MGMT_EXTND
- - NEVER USE STATIC OR DYNAMIC EVENTS for user actions when user keywords are present.
- - For user info retrieval, use EVNT_USER_MGMT_INFO (user-specific retrieval).
+- NEVER USE STATIC OR DYNAMIC EVENTS for user actions when user keywords are present (except for retrieve user info, which uses EVNT_RCRD_INFO_STC if no specific user mgmt retrieve event).
 - ONLY PROCEED TO OTHER STEPS IF NOT USER MANAGEMENT RELATED
 
 SPECIAL CASES:
@@ -1742,33 +1522,11 @@ PROMPT_STATIC_VS_DYNAMIC_ROUTER = {
   "topic": "static_vs_dynamic",
   "priority": 130,
   "role": "router",
- "data": """
-ROUTER.RULE.static_vs_dynamic | doc_type=RULE | role=router | priority=130
-Signature: STATIC_DIMENSIONS; ROLE_DEPARTMENT; USE_STC_SUFFIX
-
-Select when:
-Query targets static reference dimensions such as roles or departments (static catalogs).
-
-High-signal static cues:
-role; roles; department; departments
-
-Examples:
-- update record where department is Science
-- delete a record where role is Teacher
-
-Not static (dynamic):
-- status is active/inactive
-- date, amount, tag, archived
-
-Output rule:
-Use _STC event family (static record operations) when static cues are present.
-
-Static event family tokens:
-EVNT_RCRD_ADD_STC; EVNT_RCRD_INFO_STC; EVNT_RCRD_UPDT_STC; EVNT_RCRD_DEL_STC; EVNT_RCRD_REST_STC; EVNT_RCRD_DUP_STC
-
-ref:static_vs_dynamic#router
+  "data": """ROUTER.RULE.static_vs_dynamic
+Static catalogs ONLY: roles, departments.
+Use ONLY when query explicitly mentions: role/roles or department/departments.
+Not for general tables/entities (e.g., Enrollment Tracking) and not for "get records" queries.
 """
-
 
 ,
     "text": """STEP 0: STATIC vs DYNAMIC RECORD CLASSIFICATION (HIGHEST PRIORITY - CHECK FIRST)
@@ -1797,57 +1555,84 @@ STATIC RECORD EXAMPLES:
 """,
 }
 
-# PROMPT_ROUTER_DISAMBIGUATION = {
-#     "doc_type": "RULE",
-#     "topic": "router_disambiguation",
-#     "priority": 130,   # higher than everything else
-#     "role": "router",
-# "data": """
-# ROUTER.RULE.router_disambiguation | doc_type=RULE | role=router | priority=130
-# Signature: ROUTER_TIEBREAK_RULES; USER_MGMT_VS_STATIC
+PROMPT_ROUTER_DISAMBIGUATION = {
+    "doc_type": "RULE",
+    "topic": "router_disambiguation",
+    "priority": 130,   # higher than everything else
+    "role": "router",
+"data": """ROUTER.RULE.router_disambiguation
+Resolve collisions between user_mgmt and static_vs_dynamic.
 
-# ref:router_disambiguation#router
-# """
+If query is catalog-only:
+- "list/get/show all roles" -> static_vs_dynamic
+- "list/get/show all departments" -> static_vs_dynamic
 
+Route to user_mgmt ONLY when query is explicitly about a user action/target:
+- add/update/deactivate/activate user
+- assign role to a user
+- grant/revoke permissions for a user
+- extend responsibility of a user
 
-# PROMPT_LOOPS_ROUTER = {
-#     "doc_type": "RULE",
-#     "topic": "loops",
-#     "priority": 90,
-#     "role": "router",
-#     "data": """
+Scope: ONLY resolve user_mgmt vs static_vs_dynamic for role/department catalog queries.
+Do NOT apply to generic "get records from <entity>" queries.
+"""
 
-# """,
-#     "text": """Use when query requires repetition. Use EVNT_LOOP_* and put actions INSIDE LOOP."""
-# }
+,
+    "text": """ROUTER DISAMBIGUATION RULES (STOP-EARLY CONFLICT RESOLUTION)
+
+When user_mgmt and static_vs_dynamic are both plausible:
+1) USER_MGMT applies ONLY if the action is on users:
+   - add/create user, update user, deactivate/activate user
+   - assign role to a user, grant/revoke permissions for a user
+   - extend responsibility of a user
+
+2) STATIC applies when the query is about system tables like departments/roles:
+   - "get all departments"
+   - "list roles"
+   - "update department name"
+   - "delete role"
+
+If query has NO explicit user action verb and is only about departments/roles, choose static_vs_dynamic.
+""",
+}
+
+PROMPT_LOOPS_ROUTER = {
+    "doc_type": "RULE",
+    "topic": "loops",
+    "priority": 90,
+    "role": "router",
+    "data": """
+ROUTER.RULE.loops
+Intent: repetition / iteration.
+Signals: times, x times, repeat, for each, for every, loop, iterate, from 1 to N.
+Output: MUST use ## Loops with EVNT_LOOP_FOR/WHILE/DOWHILE.
+Hard rule: never encode repetition as params on EVNT_NOTI_* or EVNT_RCRD_* (no times=...).
+""",
+    "text": """Use when query requires repetition. Use EVNT_LOOP_* and put actions INSIDE LOOP."""
+}
 
 PROMPT_CONDITIONS_ROUTER_STRONG = {
   "doc_type": "RULE",
   "topic": "conditions",
   "priority": 160,
   "role": "router",
-"data": """
-ROUTER.RULE.conditions_strong | doc_type=RULE | role=router | priority=160
-Signature: BRANCH_DECISION; IF_ELSE_LOGIC; CNDN_BIN; CNDN_SEQ; CNDN_DOM
+  "data": """
+ROUTER.RULE.conditions_strong
+Intent: explicit TRUE/FALSE branching decisions.
 
-if else; else; otherwise
-if not then; else check if; fallback; fails then
-and check if; and verify if; parallel checks; multiple checks
-if status is approved then send email else send notification
-if X then email else notify
-if condition then send email, otherwise send notification
+Triggers:
+- explicit IF / ELSE logic
+- fallback checks ("if not then", "else check if")
+- parallel checks joined with AND
 
-NOT for: where/when filtering; record CRUD with predicates; data retrieval filtering
+DO NOT trigger on:
+- "when" used as timing
+- "when" used as record filtering
+- "when" used as workflow trigger
 
-Outputs:
-CNDN_BIN; CNDN_SEQ; CNDN_DOM
-
-ref:conditions#router_strong
-"""
-,
-  "text":   "Intent: explicit TRUE/FALSE branching decisions.\n"
-  "Triggers: IF/ELSE, fallback, parallel checks.\n"
-  + PROMPT_COND_OVERVIEW_AND_PATTERNS["text"]  # <— reuse existing full rules
+Output: CNDN_BIN / CNDN_SEQ / CNDN_DOM.
+""",
+  "text": PROMPT_COND_OVERVIEW_AND_PATTERNS["text"],  # <— reuse existing full rules
 }
 
 
@@ -1861,6 +1646,7 @@ ref:conditions#router_strong
 # -----------------
 
 LAYER0_STOP_EARLY_ROUTING = [
+    PROMPT_ROUTER_DISAMBIGUATION,
     PROMPT_USER_MGMT_ROUTER,
     PROMPT_STATIC_VS_DYNAMIC_ROUTER,
 ]
@@ -1894,7 +1680,7 @@ LAYER6_NOTIFICATIONS = [
 ]
 
 LAYER7_LOOPS = [
-    #PROMPT_LOOPS_ROUTER,
+    PROMPT_LOOPS_ROUTER,
     PROMPT_LOOPS_TYPES,
 ]
 

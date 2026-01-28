@@ -1,0 +1,12 @@
+remove user named alice
+update user email to alice@example.com
+get user info for bob
+calculate total_amount = quantity * price and create a record
+send a webhook when a record is created
+send a push notification when status is approved
+send an in-app notification when status changes
+get record info where status is active
+duplicate records where status is active
+restore a record where status is active
+while status is pending send email every hour
+repeat 5 times send sms notification

@@ -168,6 +168,7 @@ def route_topics(query: str, debug: bool = True) -> Tuple[List[str], Dict[str, f
         query_embeddings=[qvec],
         n_results=TOP_K,
         include=["distances", "metadatas"],
+        where={"role": "router"},
     )
     timing["chroma_s"] = t_chroma.elapsed()
 

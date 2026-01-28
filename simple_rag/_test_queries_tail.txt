@@ -1,0 +1,2 @@
+notify me when a record is updated
+get records where status is active

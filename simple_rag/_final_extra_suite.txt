@@ -1,0 +1,4 @@
+send a webhook when a record is created
+while status is pending send email every hour
+get record info where status is active
+get user info for bob
