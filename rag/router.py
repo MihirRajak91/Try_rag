@@ -1,7 +1,7 @@
+# rag/router.py
 import os
 import json
 import math
-import re
 import time
 import logging
 
@@ -14,7 +14,6 @@ from chromadb.config import Settings
 from openai import OpenAI
 
 load_dotenv()
-
 logger = logging.getLogger(__name__)
 
 # ---- Config ----
@@ -36,22 +35,14 @@ PRIORITY_EPSILON = float(os.getenv("PRIORITY_EPSILON", "0.01"))
 
 MAX_ALLOWED_TOPICS = int(os.getenv("MAX_ALLOWED_TOPICS", "2"))
 
-STOP_EARLY_TOPICS = ["user_mgmt", "static_vs_dynamic"]
-DISALLOWED_OUTPUT_TOPICS = {"router_disambiguation"}
-
 SECONDARY_AMBIGUITY_ABS_MAX = float(os.getenv("SECONDARY_AMBIGUITY_ABS_MAX", "0.08"))
 SECONDARY_AMBIGUITY_REL_MAX = float(os.getenv("SECONDARY_AMBIGUITY_REL_MAX", "1.10"))
 
 CENTROIDS_PATH = os.path.join(CHROMA_DIR, "topic_centroids.json")
 
-# -------------------------------------------------------------------
-# Hard precedence gates (deterministic; run before embeddings)
-# -------------------------------------------------------------------
-STATIC_KEYWORDS = {"role", "roles", "department", "departments"}
-
-ACTION_VERBS = {"create", "add", "update", "modify", "delete", "remove", "duplicate", "clone", "restore", "recover"}
-
-RECORD_HINTS = {"record", "records", "entity", "window", "row", "rows", "entry", "entries"}
+# --- Safe defaults (do NOT comment these out unless you also remove references) ---
+STOP_EARLY_TOPICS = ["user_mgmt", "static_vs_dynamic"]
+DISALLOWED_OUTPUT_TOPICS = {"router_disambiguation"}
 
 TOPIC_ALIASES = {
     "data_extraction": "data_retrieval_filtering",
@@ -59,19 +50,6 @@ TOPIC_ALIASES = {
     "data_extraction.jmes": "data_retrieval_filtering",
     "data_extraction.rcrd_info": "data_retrieval_filtering",
 }
-
-USER_KEYWORDS = {"user", "users", "permission", "permissions", "access"}
-
-USER_ACTION_HINTS = {"add", "create", "update", "modify", "deactivate", "activate", "assign", "grant", "revoke", "extend"}
-
-USER_ROLE_PHRASES = {"assign role", "role assignment", "assign roles"}
-
-# -------------------------------------------------------------------
-# Pair preferences (NO KEYWORDS): winner -> preferred secondary topics
-# -------------------------------------------------------------------
-# PAIR_PREFERENCES = {
-#     "notifications_intent": {"conditions"},
-# }
 
 
 class _Timer:
@@ -91,29 +69,6 @@ class RoutingResult:
     winner: str
     secondary: Tuple[str, ...]
     timing: Dict[str, float] = field(default_factory=dict)
-
-
-def _tokens(q: str) -> set:
-    return set(re.findall(r"[a-z]+", (q or "").lower()))
-
-
-def _forced_topic_gate(query: str) -> Optional[str]:
-    q = (query or "").lower()
-    t = _tokens(q)
-
-    # 0) USER MGMT gate ALWAYS wins for user actions (even if 'role' appears)
-    if (t & USER_KEYWORDS) and ((t & USER_ACTION_HINTS) or any(p in q for p in USER_ROLE_PHRASES)):
-        return "user_mgmt"
-
-    # 1) Static gate wins when static entities are mentioned (role/department)
-    if t & STATIC_KEYWORDS:
-        return "static_vs_dynamic"
-
-    # 2) CRUD gate (requires record hint to avoid catching user_mgmt-like queries)
-    if (t & ACTION_VERBS) and (t & RECORD_HINTS):
-        return "actions_builtin_filtering"
-
-    return None
 
 
 @dataclass
@@ -138,7 +93,6 @@ def _get_collection():
 
 
 def _group_key(meta: Dict) -> Tuple[str, str, str]:
-    # normalize to strings so grouping doesn't get weird when values are None
     doc_type = str(meta.get("doc_type") or "")
     topic = str(meta.get("topic") or "")
     role = str(meta.get("role") or "")
@@ -172,28 +126,9 @@ def _load_centroids() -> Optional[Dict[str, List[float]]]:
         return None
 
 
-def _has_condition_language(q: str) -> bool:
-    s = (q or "").lower()
-    strong = [
-        "and check if",
-        "and verify if",
-        "verify if",
-        "check if",
-        "if not",
-        "else check",
-        "fails",
-        "first check",
-        "if ",
-        " when ",
-    ]
-    if any(k in s for k in strong):
-        return True
-    return len(re.findall(r"\bif\b", s)) >= 2
-
-
 def _uniq_stable(items: List[str]) -> List[str]:
     seen = set()
-    out = []
+    out: List[str] = []
     for x in items:
         if not x or x in seen:
             continue
@@ -203,22 +138,14 @@ def _uniq_stable(items: List[str]) -> List[str]:
 
 
 def route_topics(query: str, debug: bool = True) -> Tuple[List[str], Dict[str, float]]:
+    """
+    Embedding-only router:
+    - No keyword forced-gates
+    - Topics selected by centroid similarity with optional secondary topic
+    - Optional 'conditions' overlay is centroid-distance based (no keyword detection)
+    """
     timing: Dict[str, float] = {}
     router_timer = _Timer()
-
-    # ---- Hard precedence gate (before embeddings + chroma) ----
-    t_gate = _Timer()
-    forced = _forced_topic_gate(query)
-    timing["forced_gate_s"] = t_gate.elapsed()
-
-    if forced:
-        allowed_topics = [TOPIC_ALIASES.get(forced, forced)]
-        timing["router_total_s"] = router_timer.elapsed()
-        if debug:
-            print(f"[router] query='{query}'")
-            print(f"[router] forced_topic_gate={forced}")
-            print(f"[router] allowed_topics={allowed_topics}")
-        return allowed_topics, timing
 
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
@@ -228,9 +155,11 @@ def route_topics(query: str, debug: bool = True) -> Tuple[List[str], Dict[str, f
     col = _get_collection()
     centroids = _load_centroids()
 
+    # 1) Embed query
     qvec, embed_s = _embed_query(oai, query)
     timing["embed_s"] = embed_s
 
+    # 2) Get nearest router chunks
     t_chroma = _Timer()
     res = col.query(
         query_embeddings=[qvec],
@@ -250,17 +179,16 @@ def route_topics(query: str, debug: bool = True) -> Tuple[List[str], Dict[str, f
             cands.append(Candidate(chunk_id=str(cid), distance=float(dist), meta=md))
 
     timing["router_hits"] = float(len(cands))
-
     if not cands:
         timing["router_total_s"] = router_timer.elapsed()
         return [], timing
 
     cands = sorted(cands, key=lambda x: x.distance)[:TOP_ROUTER]
 
+    # 3) Group by (doc_type, topic, role) to avoid duplicate hits from same topic/role
     groups: Dict[Tuple[str, str, str], List[Candidate]] = {}
     for c in cands:
         groups.setdefault(_group_key(c.meta), []).append(c)
-
     timing["groups"] = float(len(groups))
 
     group_summaries = []
@@ -285,7 +213,7 @@ def route_topics(query: str, debug: bool = True) -> Tuple[List[str], Dict[str, f
 
     group_summaries.sort(key=lambda g: g["best_dist"])
 
-    # priority tie-break
+    # priority tie-break on best_dist ties
     for i in range(len(group_summaries) - 1):
         a = group_summaries[i]
         b = group_summaries[i + 1]
@@ -295,20 +223,18 @@ def route_topics(query: str, debug: bool = True) -> Tuple[List[str], Dict[str, f
     topics_in_hits = _uniq_stable([g["topic"] for g in group_summaries])
     topics_in_hits = [t for t in topics_in_hits if t not in DISALLOWED_OUTPUT_TOPICS]
 
-    # If we don't have centroids, fall back to best hit topic
+    # 4) If no centroids, fall back to best hit topic(s)
     if not centroids:
-        winner_topic = topics_in_hits[0] if topics_in_hits else None
-        allowed_topics = [winner_topic] if winner_topic else []
-        allowed_topics = [t for t in allowed_topics if t and t not in DISALLOWED_OUTPUT_TOPICS]
-        allowed_topics = allowed_topics[:MAX_ALLOWED_TOPICS]
-        allowed_topics = [TOPIC_ALIASES.get(t, t) for t in allowed_topics]
-        timing["router_total_s"] = router_timer.elapsed()
+        allowed = topics_in_hits[:MAX_ALLOWED_TOPICS]
+        allowed = [t for t in allowed if t and t not in DISALLOWED_OUTPUT_TOPICS]
+        allowed = [TOPIC_ALIASES.get(t, t) for t in allowed]
         timing["centroid_s"] = 0.0
-        return allowed_topics, timing
+        timing["router_total_s"] = router_timer.elapsed()
+        return allowed, timing
 
+    # 5) Score topics by centroid distance
     t_centroids = _Timer()
-
-    scored = []
+    scored: List[Dict] = []
     for tpc in topics_in_hits:
         cvec = centroids.get(tpc)
         if not cvec:
@@ -327,8 +253,7 @@ def route_topics(query: str, debug: bool = True) -> Tuple[List[str], Dict[str, f
     if debug:
         print("[router] scored_topics:", [(s["topic"], round(s["centroid_dist"], 4)) for s in scored[:8]])
 
-
-    # priority tie-break, but don't let stop-early jump as runner-up
+    # priority tie-break on centroid ties (stop-early shouldn’t jump ahead artificially)
     for i in range(len(scored) - 1):
         a = scored[i]
         b = scored[i + 1]
@@ -340,6 +265,7 @@ def route_topics(query: str, debug: bool = True) -> Tuple[List[str], Dict[str, f
 
     winner = scored[0]
 
+    # Optional stop-early margin behavior (distance-based)
     if winner["topic"] in STOP_EARLY_TOPICS and len(scored) > 1:
         runner_up = scored[1]
         margin = runner_up["centroid_dist"] - winner["centroid_dist"]
@@ -349,56 +275,35 @@ def route_topics(query: str, debug: bool = True) -> Tuple[List[str], Dict[str, f
 
     allowed_topics: List[str] = [winner["topic"]]
 
-    # conditions auto-include (only if it's present in hits)
-    if (
-        MAX_ALLOWED_TOPICS > 1
-        and _has_condition_language(query)
-        and winner["topic"] != "conditions"
-        and "conditions" in topics_in_hits
-        and "conditions" not in allowed_topics
-    ):
-        allowed_topics.append("conditions")
+    # 6) Pick ONE secondary topic (distance/ambiguity gated)
+    if MAX_ALLOWED_TOPICS > 1 and len(scored) > 1:
+        candidates = scored[1:]
+        runner_up = candidates[0]
 
-    # # Secondary selection with ambiguity gate + pair preference
-    # if winner["topic"] not in STOP_EARLY_TOPICS and MAX_ALLOWED_TOPICS > 1:
-    #     candidates = [s for s in scored[1:] if s["topic"] not in STOP_EARLY_TOPICS]
-    #     if candidates:
-    #         runner_up = candidates[0]
-    #         abs_gap_amb = runner_up["centroid_dist"] - winner["centroid_dist"]
-    #         rel_gap_amb = runner_up["centroid_dist"] / max(winner["centroid_dist"], 1e-9)
+        abs_gap_amb = runner_up["centroid_dist"] - winner["centroid_dist"]
+        rel_gap_amb = runner_up["centroid_dist"] / max(winner["centroid_dist"], 1e-9)
 
-    #         if abs_gap_amb <= SECONDARY_AMBIGUITY_ABS_MAX and rel_gap_amb <= SECONDARY_AMBIGUITY_REL_MAX:
-    #             preferred = PAIR_PREFERENCES.get(winner["topic"], set())
-    #             preferred_candidates = [s for s in candidates if s["topic"] in preferred]
-    #             other_candidates = [s for s in candidates if s["topic"] not in preferred]
-    #             ordered = preferred_candidates + other_candidates
+        if abs_gap_amb <= SECONDARY_AMBIGUITY_ABS_MAX and rel_gap_amb <= SECONDARY_AMBIGUITY_REL_MAX:
+            for s in candidates:
+                abs_gap = s["centroid_dist"] - winner["centroid_dist"]
+                rel_gap = s["centroid_dist"] / max(winner["centroid_dist"], 1e-9)
+                if abs_gap <= ROUTER_MAX_ABS_GAP and rel_gap <= ROUTER_MAX_REL_GAP:
+                    allowed_topics.append(s["topic"])
+                    break
 
-    #             for s in ordered:
-    #                 abs_gap = s["centroid_dist"] - winner["centroid_dist"]
-    #                 rel_gap = s["centroid_dist"] / max(winner["centroid_dist"], 1e-9)
-    #                 if abs_gap <= ROUTER_MAX_ABS_GAP and rel_gap <= ROUTER_MAX_REL_GAP:
-    #                     allowed_topics.append(s["topic"])
-    #                     break
-    
-    # Secondary selection with ambiguity gate (NO pair preference)
-    if winner["topic"] not in STOP_EARLY_TOPICS and MAX_ALLOWED_TOPICS > 1:
-        candidates = [s for s in scored[1:] if s["topic"] not in STOP_EARLY_TOPICS]
-        if candidates:
-            runner_up = candidates[0]
-            abs_gap_amb = runner_up["centroid_dist"] - winner["centroid_dist"]
-            rel_gap_amb = runner_up["centroid_dist"] / max(winner["centroid_dist"], 1e-9)
-
-            if abs_gap_amb <= SECONDARY_AMBIGUITY_ABS_MAX and rel_gap_amb <= SECONDARY_AMBIGUITY_REL_MAX:
-                for s in candidates:
-                    abs_gap = s["centroid_dist"] - winner["centroid_dist"]
-                    rel_gap = s["centroid_dist"] / max(winner["centroid_dist"], 1e-9)
-                    if abs_gap <= ROUTER_MAX_ABS_GAP and rel_gap <= ROUTER_MAX_REL_GAP:
-                        allowed_topics.append(s["topic"])
-                        break
-
-
-    allowed_topics = [t for t in allowed_topics if t and t not in DISALLOWED_OUTPUT_TOPICS]
+    # cap action topics
     allowed_topics = allowed_topics[:MAX_ALLOWED_TOPICS]
+
+    # 7) Optional overlay: add "conditions" only if it’s genuinely close by centroid distance
+    cond = next((s for s in scored if s["topic"] == "conditions"), None)
+    if cond and winner["topic"] != "conditions" and "conditions" not in allowed_topics:
+        abs_gap = cond["centroid_dist"] - winner["centroid_dist"]
+        rel_gap = cond["centroid_dist"] / max(winner["centroid_dist"], 1e-9)
+        if abs_gap <= SECONDARY_AMBIGUITY_ABS_MAX and rel_gap <= SECONDARY_AMBIGUITY_REL_MAX:
+            allowed_topics.append("conditions")
+
+    # Final cleanup
+    allowed_topics = [t for t in allowed_topics if t and t not in DISALLOWED_OUTPUT_TOPICS]
     allowed_topics = [TOPIC_ALIASES.get(t, t) for t in allowed_topics]
 
     timing["centroid_s"] = t_centroids.elapsed()

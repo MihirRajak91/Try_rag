@@ -12,47 +12,82 @@ NOTE: Only `data` should be embedded for vector search.
 """
 
 PROMPT_ACTION_EVENTS_BUILTIN_FILTERING = {
-
     "doc_type": "RULE",
     "topic": "actions_builtin_filtering",
     "priority": 120,
     "role": "router",
-    "data":  """
+    "data": """
 ROUTER.RULE.actions_builtin_filtering
-Intent: database record CRUD action (create/update/delete/duplicate/restore) on a window/entity record.
-Output: choose EVNT_RCRD_ADD / EVNT_RCRD_UPDT / EVNT_RCRD_DEL / EVNT_RCRD_DUP / EVNT_RCRD_REST (direct action; record selection handled inside event).
-Scope: record operations only.
-Common natural language patterns for record actions (entity/window may be named without the word "record"):
+Intent: update/modify records/entities/forms/tasks/workflow fields (NON-user-account).
++ Intent: NON-USER workflow / task / form / record state updates.
 
-- "create in <entity/window> ..."
-- "add entry in <entity/window> ..."
-- "insert into <entity/window> ..."
-
-- "update <entity/window> ..."
-- "modify <entity/window> ..."
-- "set fields in <entity/window> where ..."
-
-- "delete from <entity/window> where ..."
-- "remove entries from <entity/window> ..."
-- "purge <entity/window> records ..."
-
-These patterns indicate direct record CRUD intent even when the word "record" is not explicitly mentioned.
-
-Common creation phrasing without the word "record":
-- "create in <entity/window> with <values>"
-- "add in <entity/window> with <values>"
-- "insert into <entity/window> with <values>"
-
-Randomization intent for create:
-- "with random values", "random suitable values", "auto-generate values" => EVNT_RCRD_ADD + generate appropriate fields
+Objects this topic applies to:
+- task
+- task status
+- task completion form
+- workflow step
+- workflow state
+- process stage
+- record status field
 
 
+MUST MATCH (positive intent signals):
+- update a record/entity/form/task
+- change status/stage/state/field value
+- mark as done/completed/cancelled/closed
+- workflow state/status update
+- form submission/status update
+- task lifecycle status update
+
+High-confidence matches:
+- change the status of Task completed to Done
+- change the status of Task completed to Done in task completion form
+- when someone moves to another task, set previous task to Done
+- update task completion form status when moving to another task
+- mark previous task as Done after workflow progresses
+- update workflow task status field to Done
+
+
+FILTERING (selection, not user-account mgmt):
+- update WHERE moved_to_another_task = true
+- update WHEN moved_to_another_task = true
+- update records matching condition (built-in filtering)
+
+HARD EXCLUSIONS (route away):
+- create/add/update/deactivate/activate a USER ACCOUNT
+- grant/revoke permissions for a user
+- assign role TO A USER (role assignment on a user account)
+- extend responsibility of a user
+- "user profile", "user details", "user permissions"
+
+DISAMBIGUATION:
+- If the object being updated is a TASK/FORM/RECORD/WORKFLOW status → actions_builtin_filtering.
+- Only choose user_mgmt if the object is explicitly a USER ACCOUNT.
+
+Anti-pattern clarification:
+- The word "user" appearing in context (e.g., "when user moves to another task")
+  does NOT imply user account management.
+- This topic applies when the UPDATED OBJECT is a task, form, or workflow,
+  NOT when updating a user account/profile.
+
+
+Output: EVNT_RCRD_UPDT / EVNT_RCRD_* action events (built-in filtering).
 """,
 
     "text": """SIMPLE WHERE FILTER RULE (NO CONDITIONS):
 - If the query uses "where/when" only to identify which records to act on (e.g., "where status is active"),
   treat it as built-in filtering and DO NOT add any CNDN_*.
 - Only use CNDN_* when the query requires branching decisions (if/else) or multiple logical paths.
+
+CONDITIONS matches:
+- if moved to another task then update status to done else end
+- if condition then update record else end
+
+NEAR-MISS VARIANTS:
+- if moved to another task then update status to done else end
+- if condition then update record else end
+- if moved to another task then update status to done else end
+- if condition then update record else end
 """
 }
 
@@ -269,9 +304,24 @@ PROMPT_COND_OVERVIEW_AND_PATTERNS = {
     "priority": 100,
     "role": "router",
     "data": """ROUTER.RULE.conditions
-Intent: conditional branching / decision logic in workflow.
-Signals: if/else, when/then, otherwise, unless, first check, if not, else check.
-Output: choose CNDN_BIN / CNDN_SEQ / CNDN_DOM (explicit TRUE + FALSE paths).
+Intent: conditional BRANCHING with mutually exclusive paths.
+
+Signals (branching ONLY):
+- if ... then ... else ...
+- otherwise
+- unless
+- if not
+- else check
+- first check ... if not ...
+
+NOT conditions:
+- temporal phrases ("when X happens")
+- record filters ("update when status = X")
+- triggers or timing
+- built-in filtering
+
+Only use when the workflow must choose between TRUE vs FALSE paths.
+Output: CNDN_BIN / CNDN_SEQ / CNDN_DOM.
 """,
 
     "text": """⚠️⚠️⚠️ CRITICAL: CONDITION TYPE DETECTION ⚠️⚠️⚠️
@@ -1136,21 +1186,78 @@ Only use CNDN_* when the workflow branches into different actions (if/else).
 }
 
 PROMPT_USER_MGMT_ROUTER = {
-    "doc_type": "RULE",
-    "topic": "user_mgmt",
-    "priority": 140,
-    "role": "router",
-"data": """ROUTER.RULE.user_mgmt
+  "doc_type": "RULE",
+  "topic": "user_mgmt",
+  "priority": 135,
+  "role": "router",
+  "data": """ROUTER.RULE.user_mgmt
 STOP-EARLY.
-Intent: actions on a user account ONLY.
-Must include explicit user target or user action:
-- add/create/update/deactivate/activate a user
-- grant/revoke permissions for a user
-- assign a role TO a user (explicitly mentions user)
-- extend responsibility of a user
-Do NOT match: list/get/show roles; list/get/show departments; role/department catalogs.
-Output: EVNT_USER_MGMT_ADD / EVNT_USER_MGMT_UPDT / EVNT_USER_MGMT_DEACT /
-EVNT_USER_MGMT_ASSIGN / EVNT_USER_MGMT_EXTND.
+Intent: actions on a USER ACCOUNT OBJECT ONLY.
+This topic applies ONLY when the PRIMARY OBJECT being changed is a user account.
+
+
+MUST MATCH (the OBJECT is a USER ACCOUNT):
+- explicit user account object: "user account", "user profile", "user details", "user permissions", "user access"
+AND
+- an account action:
+  - create/add/register user account
+  - update user profile/details
+  - activate/deactivate user account
+  - grant/revoke permissions for a user
+  - assign role TO a user account
+  - extend user responsibility/coverage
+
+HIGH-CONFIDENCE POSITIVE EXAMPLES (user account mgmt):
+- create a user with role admin
+- update user details for John
+- deactivate user account
+- grant permissions to a user
+- revoke user access
+- assign role editor to user Alice
+- extend user responsibility to HR system
+
+HARD NEGATIVE (NOT user_mgmt; route away):
+- task status update (done/completed/in progress)
+- task completion form updates
+- workflow state/status changes
+- moved to another task / moved to next step
+- form status updates (non-user forms)
+- record/entity/window/table updates
+- "change status to done"
+- "mark as done"
+- "task completed to done"
+- "change the status of Task completed to Done"
+- "update task completion form status"
+- "when someone moves to another task"
+- "user moved to another task"
+- "status changed to done"
+- "account status for task"
+- "user task status"
+- "user workflow status"
+- "change the status of Task completed to Done"
+- "update task completion form status"
+- "when someone moves to another task"
+- "mark task as done"
+- "workflow moved to next step"
+- "status changed to done"
+
+
+DISAMBIGUATION RULE:
+- If the updated object is a TASK/FORM/RECORD/WORKFLOW → NOT user_mgmt.
+- Choose user_mgmt ONLY when the updated object is explicitly a USER ACCOUNT.
+
+This topic does NOT apply to:
+- tasks
+- task status
+- task completion forms
+- workflow states
+- workflow steps
+- process stages
+- record/entity updates
+- form status updates
+
+
+Output: EVNT_USER_MGMT_* family ONLY.
 """
 
 ,
@@ -1301,8 +1408,18 @@ PROMPT_CONDITIONS_ROUTER_STRONG = {
   "role": "router",
   "data": """
 ROUTER.RULE.conditions_strong
-Intent: branching decisions with TRUE/FALSE paths.
-Patterns: if/then/else, otherwise, unless, if not then, else check if, and check if.
+Intent: explicit TRUE/FALSE branching decisions.
+
+Triggers:
+- explicit IF / ELSE logic
+- fallback checks ("if not then", "else check if")
+- parallel checks joined with AND
+
+DO NOT trigger on:
+- "when" used as timing
+- "when" used as record filtering
+- "when" used as workflow trigger
+
 Output: CNDN_BIN / CNDN_SEQ / CNDN_DOM.
 """,
   "text": PROMPT_COND_OVERVIEW_AND_PATTERNS["text"],  # <— reuse existing full rules

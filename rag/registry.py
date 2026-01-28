@@ -4,11 +4,6 @@ from typing import Dict, List, Tuple
 
 from data.rag_chunks_data_clean import chunk_data as CLEAN_CHUNKS
 
-# rag/registry.py
-from typing import Dict, List, Tuple
-
-from data.rag_chunks_data_clean import chunk_data as CLEAN_CHUNKS
-
 def _load_legacy_chunks():
     try:
         import data.rag_chunks as legacy

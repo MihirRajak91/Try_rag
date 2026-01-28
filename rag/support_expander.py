@@ -35,16 +35,20 @@ def expand_support(allowed_topics: List[str],*,winner:str| None=None) -> List[Di
 
     # ---- Boundary gates (defensive, future-proof) ----
     # If user_mgmt is present, it dominates support expansion: keep it clean.
-    if winner == "user_mgmt":
-        allowed = (allowed & USER_MGMT_FAMILY) | ALWAYS_INCLUDE_TOPICS
+    # if winner == "user_mgmt":
+    #     allowed = (allowed & USER_MGMT_FAMILY) | ALWAYS_INCLUDE_TOPICS
 
     # If static_vs_dynamic is present (and user_mgmt isn't), prevent CRUD bleed.
-    elif "static_vs_dynamic" in allowed:
+    if "static_vs_dynamic" in allowed:
         allowed = allowed - CRUD_FAMILY - USER_MGMT_FAMILY
 
     # If actions_builtin_filtering is present, prevent static/user_mgmt bleed.
-    elif "actions_builtin_filtering" in allowed:
+    if "actions_builtin_filtering" in allowed:
         allowed = allowed - STATIC_FAMILY - USER_MGMT_FAMILY
+
+    if "actions_builtin_filtering" in allowed:
+        allowed.discard("user_mgmt")
+
 
     # Always-include topics last (so they survive gating)
     allowed |= ALWAYS_INCLUDE_TOPICS
