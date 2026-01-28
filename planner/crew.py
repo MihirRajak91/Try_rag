@@ -77,7 +77,13 @@ t2_draft = Task(
         "- Do NOT add lookup/info/verification/confirmation/logging steps unless the user explicitly asks.\n"
         "- Do NOT add EVNT_RCRD_INFO_* for delete operations unless explicitly requested.\n\n"
         "Do not mention JSON. Output ONLY the Markdown plan."
-         "Trigger must be TRG_DB unless the query explicitly mentions API/file/schedule/button/webhook/auth/approval/field-entry/timeout."
+        "TRIGGER MUST-FOLLOW RULES:\n"
+        "- If the query explicitly mentions UI/field/field-entry/edit-in-UI/record edited from UI/UI triggered → Trigger = TRG_FLD.\n"
+        "- Else if it explicitly mentions clicking a button / UI button pressed / on button click → Trigger = TRG_BTN.\n"
+        " - Otherwise (no explicit trigger mentioned) → Trigger = TRG_DB."   
+        "- Else if it explicitly mentions API/file/schedule/webhook/auth/approval/timeout → use the corresponding TRG_*."
+
+
     ),
     agent=planner_agent,
     expected_output="Markdown workflow plan.",

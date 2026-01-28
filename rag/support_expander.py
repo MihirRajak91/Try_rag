@@ -17,7 +17,7 @@ def _key(ch: Dict) -> Tuple:
     return (ch.get("doc_type"), ch.get("topic"), ch.get("role"), int(ch.get("priority", 0)))
 
 
-def expand_support(allowed_topics: List[str],*,winner:str| None=None) -> List[Dict]:
+def expand_support(allowed_topics: List[str], *, winner: str | None = None) -> List[Dict]:
     allowed: Set[str] = set(allowed_topics)
 
     # Only expand topic families if the parent topic is selected
@@ -25,10 +25,10 @@ def expand_support(allowed_topics: List[str],*,winner:str| None=None) -> List[Di
 
     # ---- Family expansions (opt-in, deterministic) ----
     if "conditions" in allowed:
-        for t in ("conditions.bin", "conditions.seq", "conditions.dom"):
-            if t in existing_topics:
+        # Include all condition subtopics that exist (more robust than hardcoding)
+        for t in existing_topics:
+            if isinstance(t, str) and (t.startswith("conditions.") or t.startswith("conditions_")):
                 allowed.add(t)
-
 
     if "loops" in allowed and "flow_formatting" in existing_topics:
         allowed.add("flow_formatting")
@@ -48,7 +48,6 @@ def expand_support(allowed_topics: List[str],*,winner:str| None=None) -> List[Di
 
     if "actions_builtin_filtering" in allowed:
         allowed.discard("user_mgmt")
-
 
     # Always-include topics last (so they survive gating)
     allowed |= ALWAYS_INCLUDE_TOPICS

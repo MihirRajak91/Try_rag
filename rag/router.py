@@ -143,6 +143,9 @@ def route_topics(query: str, debug: bool = True) -> Tuple[List[str], Dict[str, f
     - No keyword forced-gates
     - Topics selected by centroid similarity with optional secondary topic
     - Optional 'conditions' overlay is centroid-distance based (no keyword detection)
+
+    IMPORTANT INVARIANT:
+    - len(allowed_topics) must never exceed MAX_ALLOWED_TOPICS
     """
     timing: Dict[str, float] = {}
     router_timer = _Timer()
@@ -300,7 +303,14 @@ def route_topics(query: str, debug: bool = True) -> Tuple[List[str], Dict[str, f
         abs_gap = cond["centroid_dist"] - winner["centroid_dist"]
         rel_gap = cond["centroid_dist"] / max(winner["centroid_dist"], 1e-9)
         if abs_gap <= SECONDARY_AMBIGUITY_ABS_MAX and rel_gap <= SECONDARY_AMBIGUITY_REL_MAX:
-            allowed_topics.append("conditions")
+            # RESPECT MAX_ALLOWED_TOPICS:
+            # If already at cap, replace the secondary slot with "conditions"
+            if len(allowed_topics) >= MAX_ALLOWED_TOPICS:
+                if MAX_ALLOWED_TOPICS > 1:
+                    allowed_topics[1] = "conditions"
+                # else MAX_ALLOWED_TOPICS == 1: keep winner only
+            else:
+                allowed_topics.append("conditions")
 
     # Final cleanup
     allowed_topics = [t for t in allowed_topics if t and t not in DISALLOWED_OUTPUT_TOPICS]

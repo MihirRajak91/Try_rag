@@ -21,6 +21,15 @@ ROUTER.RULE.actions_builtin_filtering
 Intent: update/modify records/entities/forms/tasks/workflow fields (NON-user-account).
 + Intent: NON-USER workflow / task / form / record state updates.
 
+ACTION-INTENT REQUIREMENT (to avoid stealing notification triggers):
+This topic MUST ONLY be selected when the user is asking the system to PERFORM an update/change operation.
+It must contain an explicit action verb like:
+- update / change / set / modify / mark / move / close / complete
+
+If the query is phrased as "email/sms/notify/alert WHEN/IF a record is updated/edited/changed"
+(without asking to update anything), that is NOT an action request. Route to notifications_intent.
+
+
 Objects this topic applies to:
 - task
 - task status
@@ -30,6 +39,11 @@ Objects this topic applies to:
 - process stage
 - record status field
 
+Strong matches (notification-first trigger phrasing):
+- "email/sms/notify/alert when a record is updated/edited/changed"
+- "sms the admin when status changes"
+- "notify when form is submitted"
+These are notifications_intent even though they mention "updated/edited/changed".
 
 MUST MATCH (positive intent signals):
 - update a record/entity/form/task
@@ -54,11 +68,24 @@ FILTERING (selection, not user-account mgmt):
 - update records matching condition (built-in filtering)
 
 HARD EXCLUSIONS (route away):
-- create/add/update/deactivate/activate a USER ACCOUNT
-- grant/revoke permissions for a user
-- assign role TO A USER (role assignment on a user account)
-- extend responsibility of a user
-- "user profile", "user details", "user permissions"
+- Any request whose primary intent is sending a message/notification (email/sms/notify/alert/push/webhook)
+  in response to a record/task/form/status change.
+  Route those to notifications_intent.
+
+
+- Notification-first phrasing (route away to notifications_intent):
+  If the query STARTS with or is primarily about sending a message:
+  "email ...", "sms ...", "notify ...", "send alert ..."
+  AND the rest of the query describes a trigger like:
+  "when a record is updated/edited/changed", "when status changes"
+  THEN this is notifications_intent (NOT actions_builtin_filtering).
+
+Examples (must route away):
+- "sms the admin when a record is updated"
+- "email when the data in the record is edited"
+- "notify me when record status changes"
+- "send an alert when a form is submitted"
+
 
 DISAMBIGUATION:
 - If the object being updated is a TASK/FORM/RECORD/WORKFLOW status → actions_builtin_filtering.
@@ -69,6 +96,25 @@ Anti-pattern clarification:
   does NOT imply user account management.
 - This topic applies when the UPDATED OBJECT is a task, form, or workflow,
   NOT when updating a user account/profile.
+
+MIXED ACTION + NOTIFICATION (allow BOTH topics ONLY when BOTH intents are explicit):
+
+Do NOT invent an update such as "set status to done" unless the user explicitly asked for that field/value change.
+
+✅ Must contain BOTH:
+A) an explicit action instruction to update/change/set/mark something
+AND
+B) a notification instruction (email/sms/notify/alert)
+
+Examples:
+- "update the record status to done and email the admin"
+- "change status to done then send mail"
+- "set task to completed and notify by SMS"
+
+Non-examples (notification-only; DO NOT include this topic):
+- "sms the admin when a record is updated"
+- "email when the data in the record is edited"
+
 
 
 Output: EVNT_RCRD_UPDT / EVNT_RCRD_* action events (built-in filtering).
@@ -143,6 +189,14 @@ EVNT_RCRD_UPDT (Update a Record):
 - Examples:
   - "update a record in enrollment tracking where fee charged is 2500 to fee charged 3000" → CNDN_BIN + EVNT_RCRD_UPDT (binary condition evaluates "where fee charged is 2500")
 
+MIXED ACTION + NOTIFICATION (include BOTH topics):
+- update the record status to done and email the admin
+- update status and notify by email
+- change status then send mail
+- modify record and send an alert
+Rule: when a query contains BOTH an action (update/change/set status) AND a message intent (email/sms/notify/alert),
+the router should allow notifications_intent as a secondary topic.
+
 ⚠️ CRITICAL RULE:
 - DO NOT combine these action events with EVNT_RCRD_INFO, EVNT_FLTR, or CNDN_BIN (except for complex create operations)
 - Each action event handles its own record selection and filtering internally
@@ -157,27 +211,72 @@ If a query starts with "create" or contains "create a record", it is ALWAYS a CR
 PROMPT_NOTIFICATIONS_INTENT = {
     "doc_type": "RULE",
     "topic": "notifications_intent",
-    "priority": 95,
+    "priority": 140,
     "role": "router",
     "data": """
 ROUTER.RULE.notifications_intent
-Intent: send a message/notification to a recipient.Do not use when query contains if/else branching — use conditions.
+Intent: send a message/notification to a recipient.
+
 Signals: email, mail, notify, notification, alert, sms, text message, push, webhook.
+Recipient signals: admin, user, owner, manager, team, assignee.
+
+High-confidence matches (notification is the primary action):
+- email the admin when a record is updated
+- email admin when a record is updated
+- send email to admin when a record is updated
+- notify the admin when a record changes
+- notify admin when status changes
+- sms the admin when a record is updated
+- text admin when status changes
+- send an alert when record is modified
+- push notification when task status changes
+- webhook when a form record is edited
+
+Mixed intent:
+If the query includes BOTH:
+- a record/task/form/workflow update action AND
+- a notification action (email/sms/notify/alert)
+then notifications_intent may appear as a secondary topic (actions_builtin_filtering can still be primary).
+
 Output: select EVNT_NOTI_* event family (exact mapping handled by agent/backstory).
 """,
     "text": """Use when the user request is primarily about sending a notification/message.
-Do not use for record CRUD, loops, or computations."""
+Do not use for record CRUD, loops, or computations.
+
+- If the prompt mentions a record being created/edited/updated ONLY as a trigger/context (e.g., "when a record is edited"), do NOT add any EVNT_RCRD_* action steps unless the user explicitly asks to create/update/delete/restore/duplicate a record."""
 }
+
+
 
 PROMPT_NOTIFICATIONS_SUPPORT = {
     "doc_type": "RULE",
     "topic": "notifications_intent",
-    "priority": 95,
+    "priority": 140,
     "role": "support",
     "data": """
-SUPPORT.RULE.notifications_intent
-Use when the workflow needs notification guidance and event family selection.
-""",
+ SUPPORT.RULE.notifications_intent
+
+Map intent to the correct EVNT_NOTI_* event:
+
+- Email → EVNT_NOTI_MAIL
+- SMS/Text → EVNT_NOTI_SMS
+- System notification → EVNT_NOTI_NOTI
+- Push → EVNT_NOTI_PUSH
+- Webhook → EVNT_NOTI_WBH
+
+Hard rule:
+- NEVER output EVNT_NOTI_EMAIL
+- ALWAYS use EVNT_NOTI_MAIL for email notifications
+
+If recipient is not specified:
+- treat "admin" as a valid notification recipient role
+- OR add a resolve-recipient step
+
+If subject/body not given:
+- include placeholders
+
+"""
+,
     "text": """Use when the user request is primarily about sending a notification/message.
 Map intent to the correct EVNT_NOTI_* event:
 - Email → EVNT_NOTI_MAIL
@@ -192,6 +291,7 @@ Do not use for record CRUD, loops, or computations.
 - if subject/body not given → include placeholders
 """
 }
+
 
 PROMPT_DATA_OPS_RULES = {
 
@@ -230,6 +330,16 @@ Examples – ALWAYS use EVNT_DATA_OPR:
 - "set status to 'Overdue' if due_date < today" → EVNT_DATA_OPR + CNDN_BIN if branching needed
 
 DO NOT use CNDN_BIN just for value assignment – use EVNT_DATA_OPR for computed fields.
+
+HARD BAN (trigger-only record mentions):
+- If the query mentions a record being created/edited/updated ONLY as a trigger or context
+  (e.g., "when a record is edited", "on record update"),
+  DO NOT output any EVNT_RCRD_* steps.
+
+- Output EVNT_RCRD_* steps ONLY when the user explicitly requests a record action
+  using verbs such as:
+  create, add, update, modify, delete, remove, restore, duplicate, set status.
+
 Only use CNDN_BIN when the entire action branches (e.g., create vs update, send email or not).
 
 The workflow plan is NOT JSON.
@@ -1000,12 +1110,48 @@ OUTPUT CONTRACT (STRUCTURED WORKFLOW PLAN TEMPLATE)
 Your output MUST be a Markdown Structured Workflow Plan (NOT JSON) using only the sections required.
 
 HARD FORMAT RULES (non-negotiable):
+- -If an EVNT_* appears inside ## Conditions → ### CNDN_BIN, it MUST NOT appear anywhere in ## Steps.
+
 - NEVER write freeform "IF ... THEN ..." lines inside ## Steps.
-- ## Steps must contain ONLY numbered CODES (EVNT_* and/or CNDN_*)(plus their parameters, if any).
-- If the query requires branching, use ONLY the ## Conditions section with CNDN_BIN.
+
+- ## Steps must contain ONLY numbered, single-line EVNT_* codes
+  (plus their parameters, if any).
+
+- Each numbered line in ## Steps MUST be a single line item.
+  (No nested bullets, no multiline blocks, no IF/ELSE content.)
+
+- CNDN_* codes MUST NOT appear inside ## Steps.
+
+- If the query requires branching, use ONLY the ## Conditions section
+  with ### CNDN_BIN.
+
+- MUST: Never place CNDN_BIN (or any IF TRUE / IF FALSE blocks)
+  inside ## Steps.
+  If branching is required:
+  - ## Steps must list ONLY EVNT_* steps.
+  - ALL branching logic must appear ONLY under:
+    ## Conditions → ### CNDN_BIN.
+
 - Use ## Conditions ONLY when there are mutually exclusive TRUE vs FALSE paths (if/else).
-- If the query uses "if/when/where" ONLY to select which records to act on (filtering),
-  DO NOT use ## Conditions; encode it as Match/Filter fields inside the EVNT_* step(s).
+
+- If the query uses "if / when / where" ONLY to select which records to act on
+  (filtering, matching, constraints),
+  DO NOT use ## Conditions.
+  Encode filtering inside the EVNT_* parameters instead.
+
+- Inside ### CNDN_BIN, the labels MUST be EXACTLY:
+  - IF TRUE:
+  - IF FALSE:
+  (Do NOT write "IF email succeeds", "IF success", or similar.)
+
+-If an EVNT_* appears inside ## Conditions → ### CNDN_BIN, it MUST NOT appear anywhere in ## Steps.
+- When ## Conditions exists, ## Steps must include ONLY the unconditional events that occur BEFORE the branch decision.
+- All conditional-path events must appear ONLY under ## Conditions.
+- In ### CNDN_BIN, IF TRUE / IF FALSE refers to the success/failure of the most recent EVNT_ step in ## Steps immediately before the Conditions section.*
+
+HARD BAN (Trigger-only mention): If the query mentions a record being created/edited/updated ONLY as the trigger/context (e.g., “when a record is edited in the UI”), DO NOT output any EVNT_RCRD_* steps.
+
+-Only output EVNT_RCRD_* when the user explicitly requests record CRUD actions using verbs like: create/add/update/modify/delete/restore/duplicate/set status.
 
 LOOP DEDUPE RULE:
 - If the workflow includes a ## Loops section, do NOT repeat the looped action in ## Steps.
@@ -1037,6 +1183,14 @@ Use this template (omit sections that are not needed):
 
 ## End
 - End
+
+- DO NOT wrap the output in triple backticks (no ```markdown fences). Output raw Markdown only.
+
+-ENFORCEMENT (no post-branch steps):
+- If ## Conditions exists, ## Steps must include ONLY the unconditional EVNT_* steps that occur BEFORE branching.
+- Therefore, ANY EVNT_* that occurs only on a TRUE/FALSE path (e.g., SMS after email success) MUST appear ONLY under ## Conditions → ### CNDN_BIN and MUST NOT appear in ## Steps.
+- In other words: when branching exists, do NOT list “next” actions in ## Steps. Put them only in the branch path.
+
 """
 }
 
@@ -1103,7 +1257,7 @@ Output: formatting policy only (not event selection).
 PROMPT_TRIGGERS_RULES = {
     "doc_type": "RULE",
     "topic": "triggers_rules",
-    "priority": 95,   # higher than triggers_catalog(40) and planner_policy(80)
+    "priority": 95,
     "role": "support",
     "data": """
 SUPPORT.RULE.triggers_rules
@@ -1113,22 +1267,36 @@ Output: trigger selection rules (not the trigger catalog list).
     "text": """
 TRIGGER SELECTION RULES (DEFAULT + DECISION TREE)
 
-- Default: If the user does NOT explicitly mention API/file/schedule/button/webhook/auth/approval/field-entry/timeout,
+- Default: If the user does NOT explicitly mention API/file/schedule/button/webhook/auth/approval/ui/field-entry/field/timeout,
   use TRG_DB.
 
 - Use TRG_API only when the query explicitly mentions API call/request/endpoint/integration.
 - Use TRG_FILE only when the query explicitly mentions file upload/import/export/CSV/Excel.
 - Use TRG_SCH only when the query explicitly mentions time/schedule/daily/weekly/cron.
-- Use TRG_BTN only when the query explicitly mentions clicking a button / UI action.
+
+- Use TRG_BTN only when the query explicitly mentions clicking a button / UI action (explicit button click).
+  Examples: "on button click", "when user clicks submit", "UI button pressed"
+
+- Use TRG_FLD for UI field entry/update events (UI edit implies field update).
+  Treat these as TRG_FLD (even if the query uses loose wording):
+  - "UI triggered"
+  - "triggered from UI"
+  - "edited in UI"
+  - "record edited from UI"
+  - "UI field updated"
+  - "form field changed"
+  - "user edits record data"
+MUST RULE: If the query contains "UI triggered" / "triggered from UI" / "edited in UI" / "record is edited" / "user edits record data" → TRG_FLD (do NOT default to TRG_DB).
+
 - Use TRG_WBH only when the query explicitly mentions an incoming webhook.
 - Use TRG_AUTH only for login/logout/password reset/change.
 - Use TRG_APRVL only for approval events.
-- Use TRG_FLD only for UI field entry/update events.
 - Use TRG_OUT only for timeouts/expiry.
 
 TRG_NOTI is NOT a valid trigger. Do not invent triggers. For notifications, use EVNT_NOTI_ events and TRG_DB by default unless the user explicitly indicates another trigger type (API/file/schedule/button/webhook/auth/approval/field/timeout).
 """
 }
+
 
 PROMPT_DATA_RETRIEVAL_ROUTER = {
   "doc_type": "RULE",
@@ -1195,7 +1363,6 @@ STOP-EARLY.
 Intent: actions on a USER ACCOUNT OBJECT ONLY.
 This topic applies ONLY when the PRIMARY OBJECT being changed is a user account.
 
-
 MUST MATCH (the OBJECT is a USER ACCOUNT):
 - explicit user account object: "user account", "user profile", "user details", "user permissions", "user access"
 AND
@@ -1220,27 +1387,13 @@ HARD NEGATIVE (NOT user_mgmt; route away):
 - task status update (done/completed/in progress)
 - task completion form updates
 - workflow state/status changes
-- moved to another task / moved to next step
-- form status updates (non-user forms)
-- record/entity/window/table updates
+- process step moved / moved to another task
+- form status updates
+- record/entity/table updates
 - "change status to done"
 - "mark as done"
 - "task completed to done"
-- "change the status of Task completed to Done"
-- "update task completion form status"
-- "when someone moves to another task"
-- "user moved to another task"
-- "status changed to done"
-- "account status for task"
-- "user task status"
-- "user workflow status"
-- "change the status of Task completed to Done"
-- "update task completion form status"
-- "when someone moves to another task"
-- "mark task as done"
-- "workflow moved to next step"
-- "status changed to done"
-
+- "moved to another task"
 
 DISAMBIGUATION RULE:
 - If the updated object is a TASK/FORM/RECORD/WORKFLOW → NOT user_mgmt.
@@ -1256,8 +1409,10 @@ This topic does NOT apply to:
 - record/entity updates
 - form status updates
 
-
 Output: EVNT_USER_MGMT_* family ONLY.
+""",
+  "text": """STEP -1: USER MANAGEMENT DETECTION (HIGHEST PRIORITY - CHECK FIRST)
+...
 """
 
 ,
