@@ -19,7 +19,8 @@ EMBED_MODEL = os.getenv("OPENAI_EMBEDDING_MODEL", os.getenv("EMBED_MODEL", "text
 TOP_K = int(os.getenv("QUERY_TOP_K", "8"))
 MAX_BLOCKS = int(os.getenv("SIMPLE_RAG_MAX_BLOCKS", "10"))
 LOOPS_MAX_ABS_GAP = float(os.getenv("SIMPLE_RAG_LOOPS_MAX_ABS_GAP", "0.20"))
-CONDITIONS_MAX_ABS_GAP = float(os.getenv("SIMPLE_RAG_CONDITIONS_MAX_ABS_GAP", "0.12"))
+CONDITIONS_MAX_ABS_GAP = float(os.getenv("SIMPLE_RAG_CONDITIONS_MAX_ABS_GAP", "0.20"))
+CONDITIONS_MIN_GAP_OVER_ACTIONS = float(os.getenv("SIMPLE_RAG_CONDITIONS_MIN_GAP_OVER_ACTIONS", "0.03"))
 ACTIONS_MAX_ABS_GAP = float(os.getenv("SIMPLE_RAG_ACTIONS_MAX_ABS_GAP", "0.05"))
 STATIC_MAX_ABS_GAP = float(os.getenv("SIMPLE_RAG_STATIC_MAX_ABS_GAP", "0.05"))
 STATIC_MIN_GAP_OVER_ACTIONS = float(os.getenv("SIMPLE_RAG_STATIC_MIN_GAP_OVER_ACTIONS", "0.05"))
@@ -312,12 +313,18 @@ def build_prompt(user_query: str, top_k: int = TOP_K) -> str:
     conditions_triggered = False
     if router_hits:
         top_dist = router_hits[0].get("distance", 1e9)
+        conditions_dist = None
+        actions_dist = None
         for r in router_hits:
             topic = str((r.get("meta") or {}).get("topic", "")).lower()
-            if _is_conditions_topic(topic):
-                if (r.get("distance", 1e9) - top_dist) <= CONDITIONS_MAX_ABS_GAP:
-                    conditions_triggered = True
-                break
+            if _is_conditions_topic(topic) and conditions_dist is None:
+                conditions_dist = r.get("distance", 1e9)
+            if topic == "actions_builtin_filtering" and actions_dist is None:
+                actions_dist = r.get("distance", 1e9)
+
+        if conditions_dist is not None and (conditions_dist - top_dist) <= CONDITIONS_MAX_ABS_GAP:
+            if actions_dist is None or (conditions_dist + CONDITIONS_MIN_GAP_OVER_ACTIONS) < actions_dist:
+                conditions_triggered = True
 
     # Notification-only guard: when top router topic is notifications_intent
     # and no action routing topics are present.
@@ -348,6 +355,11 @@ def build_prompt(user_query: str, top_k: int = TOP_K) -> str:
         if (static_dist - top_dist) <= STATIC_MAX_ABS_GAP:
             if actions_dist is None or (actions_dist - static_dist) > STATIC_MIN_GAP_OVER_ACTIONS:
                 static_required = True
+
+    # If query explicitly mentions role/department, force static
+    ql = user_query.lower()
+    if (" role " in f" {ql} ") or (" department " in f" {ql} "):
+        static_required = True
 
     # Use any retrieved topic (router/support) to decide loops enforcement
     retrieved_topics = {
@@ -386,6 +398,12 @@ def build_prompt(user_query: str, top_k: int = TOP_K) -> str:
         parts.append("META.NOTIFICATION_ONLY\n- Only EVNT_NOTI_* steps are allowed. Do NOT add EVNT_RCRD_* or EVNT_FLTR_*.\n")
     if static_required:
         parts.append("META.STATIC_ONLY\n- Use ONLY _STC events for static dimensions (roles/departments). Do NOT use dynamic EVNT_RCRD_*.\n")
+
+    # Loop-only guard: if query implies a loop, avoid conditions enforcement
+    ql = user_query.lower()
+    loop_only = any(k in ql for k in ["repeat", "times", "loop", "while", "do while", "at least once"])
+    if loop_only:
+        parts.append("META.LOOP_ONLY\n- Use ONLY loop structures. Do NOT add Conditions for loop-only requests.\n")
 
     parts.append("USER.QUERY\n" + user_query.strip())
 

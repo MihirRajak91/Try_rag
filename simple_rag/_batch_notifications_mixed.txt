@@ -1,0 +1,6 @@
+notify me when a record is updated
+send a webhook when a record is created
+send a push notification when status is approved
+send an in-app notification when status changes
+send email and sms when status is approved
+update the record status to done and email the admin

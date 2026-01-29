@@ -1,0 +1,6 @@
+do this at least once then check status
+do while status is pending send email then check
+repeat 5 times, then stop loop if status is inactive
+get names and emails where status is active
+send email and sms when status is approved
+update the record status to done and email the admin

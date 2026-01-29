@@ -1,0 +1,5 @@
+create a record where status is active
+update record where status is active
+delete the record where status is inactive
+duplicate records where status is active
+restore a record where status is active

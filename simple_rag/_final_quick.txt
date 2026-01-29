@@ -1,0 +1,5 @@
+if status is approved send email else send notification
+send a push notification when status is approved
+delete a record where role is Teacher
+get names and emails where status is active
+repeat 5 times, then stop loop if status is inactive

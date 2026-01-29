@@ -1,0 +1,6 @@
+if status is approved send email else send notification
+repeat 3 times send an email notification to the admin
+while status is pending send email every hour
+do this at least once then check status
+do while status is pending send email then check
+repeat 5 times, then stop loop if status is inactive

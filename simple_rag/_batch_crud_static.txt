@@ -1,0 +1,5 @@
+add new department science
+update record where department is Science
+delete a record where role is Teacher
+duplicate the record where department is management
+restore a record where department is management

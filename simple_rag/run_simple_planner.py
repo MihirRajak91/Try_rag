@@ -28,9 +28,13 @@ def main() -> None:
 
     prompt = build_prompt(q)
     require_conditions = "CONDITIONS ENFORCEMENT (HARD RULES)" in prompt
+    ql_for_conditions = f" {q.lower()} "
+    if (" if " in ql_for_conditions) and (" else " in ql_for_conditions or " otherwise " in ql_for_conditions):
+        require_conditions = True
     require_loops = "LOOPS ENFORCEMENT (HARD RULES)" in prompt
     require_notification_only = "META.NOTIFICATION_ONLY" in prompt
     require_static_only = "META.STATIC_ONLY" in prompt
+    require_loop_only = "META.LOOP_ONLY" in prompt
 
     client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
     system_msg = (
@@ -69,9 +73,11 @@ def main() -> None:
     loop_kind = "EVNT_LOOP_FOR"
     if require_loops:
         ql = q.lower()
-        if "while " in ql or ql.startswith("while"):
+        if "at least once" in ql or "do once" in ql:
+            loop_kind = "EVNT_LOOP_DOWHILE"
+        elif "while " in ql or ql.startswith("while"):
             loop_kind = "EVNT_LOOP_WHILE"
-        elif "do " in ql and "while" in ql:
+        elif "do while" in ql or ("do " in ql and " while " in ql):
             loop_kind = "EVNT_LOOP_DOWHILE"
         m = re.search(r"\b(\d+)\b", q)
         if m:
@@ -83,6 +89,8 @@ def main() -> None:
         require_loops=require_loops,
         require_notification_only=require_notification_only,
         require_static_only=require_static_only,
+        require_loop_only=require_loop_only,
+        query_text=q,
         loop_kind=loop_kind,
         loop_count=loop_count,
     )

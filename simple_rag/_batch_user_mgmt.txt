@@ -1,0 +1,3 @@
+remove user named alice
+update user email to alice@example.com
+get user info for bob
