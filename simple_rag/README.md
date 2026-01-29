@@ -78,5 +78,6 @@ uv run python simple_rag/run_simple_planner.py
 Notes
 -----
 - The system is intentionally simple: no centroids, no router model, no keyword rules.
-- Output normalization is used to enforce strict formatting and edge-case cleanup.
+- Output normalization is disabled; prompts enforce formatting directly.
 - If you change `data/rag_chunks_data_clean.py`, rebuild embeddings.
+- Known edge case: Notification-only queries with explicit branching (e.g., "if status is approved send email else send notification") may still output both Steps and Conditions. This is a prompt-only limitation without post-processing.

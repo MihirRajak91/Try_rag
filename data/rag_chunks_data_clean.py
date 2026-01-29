@@ -184,6 +184,7 @@ EVNT_RCRD_REST (restore/unarchive record)
 Key constraint:
 - These events include built-in record filtering; do not pair with EVNT_RCRD_INFO or EVNT_FLTR.
 - Prefer emitting ONLY the action event when the request is a direct record action over selected rows.
+- If static keywords are present (role/department), use the _STC variants of these actions.
 
 Action detection triggers (safe):
 create record; add record; new record; insert record
@@ -195,6 +196,7 @@ restore record; unarchive record
 Where/when usage:
 - Patterns: "ACTION ... where <predicate>" / "ACTION ... when <predicate>" / "ACTION ... for rows where <predicate>"
 - Predicate applies to selecting target rows for the action.
+- IMPORTANT: If the query says "update record(s) where ...", the correct output is EVNT_RCRD_UPDT (not EVNT_FLTR).
 
 Create-vs-update disambiguation (high-signal):
 If query starts with "create" OR contains "create a record" → ALWAYS EVNT_RCRD_ADD (never EVNT_RCRD_UPDT), even if phrasing contains "to".
@@ -208,6 +210,8 @@ Examples (kept channel-neutral):
 - "delete records where status = expired" → EVNT_RCRD_DEL
 - "duplicate records where value > 100" → EVNT_RCRD_DUP
 - "update records where tier = gold; set status = done" → EVNT_RCRD_UPDT
+- "update record where status is active" → EVNT_RCRD_UPDT
+- "duplicate the record where department is management" → EVNT_RCRD_DUP_STC
 - "update status and perform OUTBOUND_MESSAGE_INTENT" → action event + allow notifications_intent secondary
 
 ref:actions_builtin_filtering#support
@@ -231,6 +235,7 @@ EVNT_RCRD_DUP (Duplicate a Record):
 - Examples:
   - "duplicate the record of Enrollment Tracking where Title is Enrollment 1 and status is enrolled" → EVNT_RCRD_DUP ONLY
   - "duplicate a record when value is greater than 100" → EVNT_RCRD_DUP ONLY (built-in condition handling)
+  - If role/department is mentioned, use EVNT_RCRD_DUP_STC
 
 EVNT_RCRD_REST (Restore a Record):
 - Keywords: "restore the record", "restore record of [entity]"
@@ -347,6 +352,7 @@ Do not use for record CRUD, loops, or computations.
 
 - if recipient email isn’t given → add a “resolve recipient” step OR treat “anish” as user record lookup
 - if subject/body not given → include placeholders
+- Webhook notifications (EVNT_NOTI_WBH) are actions, not triggers; default Trigger remains TRG_DB unless the user explicitly requests an incoming webhook trigger.
 """
 }
 
@@ -944,12 +950,10 @@ SUPPORT.RULE.loops | doc_type=RULE | role=support | priority=70
 Signature: EVNT_LOOP_FOR; EVNT_LOOP_WHILE; EVNT_LOOP_DOWHILE; LOOP_CONTROL; LOOP_FORMAT
 
 Task:
-Detect repetition/iteration intent and map to correct loop event type; format loop blocks in the workflow plan.
+Detect explicit repetition/iteration intent and map to correct loop event type; format loop blocks in the workflow plan.
 
-Example signals (for retrieval):
-- repeat N times send email
-- repeat 3 times send a notification
-- run this N times
+Use ONLY when the query explicitly asks for repetition (e.g., "repeat", "N times", "loop", "iterate", "for each", "for every", "from X to Y").
+Do NOT use for CRUD actions unless explicit repetition is stated.
 
 Loop type mapping:
 - EVNT_LOOP_FOR: iterate over a collection OR repeat N times / range iteration
@@ -957,7 +961,7 @@ Loop type mapping:
 - EVNT_LOOP_WHILE: pre-check loop (condition evaluated before each iteration)
   cues: while; as long as; until <state changes> (pre-check phrasing)
 - EVNT_LOOP_DOWHILE: post-check loop (executes at least once then checks)
-  cues: do once then check; execute at least once; run then verify
+  cues: do while; do once then check; execute at least once; run then verify; at least once
 - EVNT_LOOP_BREAK: exit loop early
   cues: break; stop loop; exit loop
 - EVNT_LOOP_CONTINUE: skip iteration
@@ -974,7 +978,7 @@ Nesting rule (placeholder-safe):
 
 Not loops:
 - Numeric comparisons or filters (e.g., value > 100, amount <= 50, where status = active)
-- Thresholds or ranges used to select records
+- Thresholds or ranges used to select items
 
 ref:loops#support
 """
@@ -984,7 +988,7 @@ ref:loops#support
 3. Loop Events (EVNT_LOOP_FOR, EVNT_LOOP_WHILE, EVNT_LOOP_DOWHILE):
 
 Use EVNT_LOOP_FOR when:
-- Iterating over data collections: "for each item in", "for every record", "process all items"
+- Iterating over data collections: "for each item in", "for every item", "process all items"
 - Iterating over numeric ranges: "loop from X to Y", "from 1 to 10", "repeat 5 times"
 
 Use EVNT_LOOP_WHILE when:
@@ -993,7 +997,7 @@ Use EVNT_LOOP_WHILE when:
 
 Use EVNT_LOOP_DOWHILE when:
 - Action executes at least ONCE, then condition checked
-- Keywords: "do X at least once", "execute then check"
+- Keywords: "do while", "do X at least once", "execute then check", "at least once"
 
 Use EVNT_LOOP_BREAK when:
 - Need to exit loop immediately based on condition
@@ -1027,7 +1031,6 @@ PATTERN 2: STANDALONE LOOP (Query has ONLY repetition, NO condition)
 Query pattern: "[Action] N times" (no "when" or "if")
 Examples:
 - "Send email 10 times"
-- "Create 5 records"
 - "Loop through all items and update them"
 
 Structure:
@@ -1286,6 +1289,57 @@ Enforce the output format contract: produce a structured workflow plan as raw Ma
 Format triggers:
 workflow plan template; output format; structured plan; markdown sections; section headers; formatting rules; numbered steps; no code fences; no JSON
 
+Trigger format (required):
+## Trigger must include exactly one bullet line: "- TRG_*" (default TRG_DB if not explicitly specified)
+
+Start format (required):
+## Start must include exactly one bullet line: "- Start"
+
+End format (required):
+## End must include exactly one bullet line: "- End"
+
+Loops format (required when loops are required):
+- Include a ## Loops section only when repetition is required.
+- The first line under ## Loops must be a bullet with EVNT_LOOP_* (e.g., "- EVNT_LOOP_FOR" or "- EVNT_LOOP_FOR (count: N)").
+- The next line must be "↳ INSIDE LOOP: <EVNT_* ...>" (or the specific action).
+- If the prompt declares LOOP_ONLY, omit ## Steps entirely and use only ## Loops for the action.
+- Do NOT use ## Loops unless the query explicitly mentions repetition (e.g., "times", "repeat", "loop", "for each", "for every", "from X to Y").
+- Never infer loops from words like "when" or "if". If there is no explicit repetition, do NOT use EVNT_LOOP_* and do NOT include ## Loops.
+- Do NOT wrap CRUD actions (EVNT_RCRD_*) in loops unless the query explicitly asks for repetition.
+- Never place EVNT_LOOP_* inside ## Steps; loop content must appear only under ## Loops.
+- If the query says "at least once", use EVNT_LOOP_DOWHILE in ## Loops (not Conditions).
+- If the query says "do while", use EVNT_LOOP_DOWHILE in ## Loops (not Conditions).
+
+Conditions format (required when conditions are required):
+- Include a ## Conditions section only when branching is required.
+- The first line under ## Conditions must be a subheader: "### CNDN_BIN" or "### CNDN_SEQ" or "### CNDN_DOM".
+- If conditions are required, ## Steps must be exactly one line: "1. CNDN_BIN" (or CNDN_SEQ/CNDN_DOM).
+- When conditions are required, do NOT put any EVNT_* in ## Steps.
+- Do NOT include ## Conditions unless the user explicitly asks for branching or mutually exclusive outcomes.
+ - If ## Conditions is present, ## Steps must be exactly one line: "1. CNDN_BIN" or "1. CNDN_SEQ" or "1. CNDN_DOM".
+
+Notification channel rules (required when notifications are requested):
+- If the query mentions a notification channel, use the matching EVNT_NOTI_*:
+  email → EVNT_NOTI_MAIL, sms/text → EVNT_NOTI_SMS, push → EVNT_NOTI_PUSH,
+  webhook → EVNT_NOTI_WBH, in-app/system notification → EVNT_NOTI_NOTI.
+- If no channel is specified but notification intent exists, default to EVNT_NOTI_NOTI.
+- Do not include non-notification EVNT_* steps when the request is notification-only.
+- If multiple channels are requested, list each channel as its own step and do NOT add ## Conditions.
+- Never use ## Conditions to represent multiple notification channels.
+- If the request is notification-only, use only EVNT_NOTI_* events.
+- If a specific channel is mentioned, output ONLY that channel (do NOT add EVNT_NOTI_NOTI).
+- If a notification uses a simple "when/if" trigger with no explicit else/otherwise, do NOT use ## Conditions; output the EVNT_NOTI_* steps directly.
+
+Retrieval-only rules (required when user only wants to read/filter/project data):
+- Do NOT use ## Conditions or ## Loops.
+- Steps should include only EVNT_RCRD_INFO / EVNT_FLTR / EVNT_JMES as applicable.
+- If filters/field selection are requested without actions, avoid EVNT_RCRD_* actions.
+- If a filter is present and it already implies the record set, EVNT_FLTR alone is acceptable (EVNT_RCRD_INFO may be omitted).
+
+Static-only rules (required when prompt declares STATIC_ONLY):
+- Use EVNT_RCRD_*_STC variants for record CRUD and info (ADD/UPDT/DEL/REST/DUP/INFO).
+- When static-only add/create is requested (e.g., department/role), use EVNT_RCRD_ADD_STC and avoid Conditions.
+
 Template shape (header-only):
 ## Trigger
 ## Start
@@ -1308,12 +1362,45 @@ OUTPUT CONTRACT (STRUCTURED WORKFLOW PLAN TEMPLATE)
 Your output MUST be a Markdown Structured Workflow Plan (NOT JSON) using only the sections required.
 
 HARD FORMAT RULES (non-negotiable):
+- ## Trigger must contain EXACTLY one bullet line in the format: "- TRG_*".
+- If no explicit trigger is mentioned in the query, default to "- TRG_DB".
+- ## Start must contain EXACTLY one bullet line: "- Start".
+- ## End must contain EXACTLY one bullet line: "- End".
+- Do NOT place "- End" anywhere except under ## End.
+- Always include the ## End section as the final section in the plan.
+- Never output a bare "- End" line unless it is directly under a "## End" header.
+- The "## End" header must appear immediately before the "- End" line.
+- Include exactly ONE "## End" header.
+- The ## End section must be exactly two lines:
+  ## End
+  - End
+- CRUD actions (EVNT_RCRD_ADD/UPDT/DEL/REST/DUP) must NOT be placed inside ## Loops unless the query explicitly requests repetition.
+- Never output a bare "Start" line; it must be exactly "- Start" under ## Start.
+- If static add/create is requested (departments/roles), do NOT include ## Conditions; output only EVNT_RCRD_ADD_STC.
+- If the query mentions role/roles/department/departments, use ONLY _STC events for record CRUD.
+- When using _STC actions, do NOT add EVNT_FLTR; the action already targets the static record set.
+- When loops are required, ## Loops must include:
+  - a single EVNT_LOOP_* bullet line
+  - a following "↳ INSIDE LOOP: ..." line describing the loop action
+- When conditions are required:
+  - ## Steps must be exactly one line: "1. CNDN_BIN" or "1. CNDN_SEQ" or "1. CNDN_DOM"
+  - ## Conditions must include a matching "### CNDN_*" subheader
+  - No EVNT_* lines are allowed inside ## Steps
+- When notification intent is present:
+  - Use ONLY EVNT_NOTI_* steps (no EVNT_RCRD_*, EVNT_FLTR, EVNT_JMES, etc.)
+  - If a channel is explicitly mentioned, it must be used
+  - If multiple channels are requested, include each as its own step
+- When retrieval-only intent is present:
+  - Use ONLY EVNT_RCRD_INFO / EVNT_FLTR / EVNT_JMES steps
+  - Do NOT include ## Conditions or ## Loops
 - -If an EVNT_* appears inside ## Conditions → ### CNDN_BIN, it MUST NOT appear anywhere in ## Steps.
 
 - NEVER write freeform "IF ... THEN ..." lines inside ## Steps.
 
 -## Steps must contain ONLY numbered, single-line codes.
 -## Steps must contain ONLY numbered, single-line codes.
+-## Steps must contain ONLY numbered, single-line codes.
+-Do NOT add sub-bullets under ## Steps.
 
     - If "conditions" topic is selected: Steps MUST be exactly: 1. CNDN_BIN or 1. CNDN_SEQ or 1. CNDN_DOM
       and MUST NOT list any EVNT_* steps.
@@ -1585,6 +1672,7 @@ Event mapping:
 Common retrieval pipeline (composition):
 EVNT_RCRD_INFO → EVNT_FLTR → EVNT_JMES
 (omit steps that are not requested; for simple filtered retrievals, EVNT_FLTR alone is acceptable)
+If both filtering and field selection are requested, include BOTH EVNT_FLTR and EVNT_JMES (in that order).
 
 Keywords (retrieval-only):
 get/list/show/retrieve/search/query records; where filter; criteria; constraints; matching; select fields; extract columns; projection; names/emails/ids
@@ -1609,16 +1697,48 @@ Use EVNT_JMES for:
 
 Never use CNDN_* for simple WHERE filtering.
 Only use CNDN_* when the workflow branches into different actions (if/else).
+If both a filter and specific fields are requested (e.g., "names/emails where ..."), output BOTH EVNT_FLTR and EVNT_JMES.
+"""
+}
+
+PROMPT_DATA_RETRIEVAL_NO_LOOPS = {
+    "doc_type": "RULE",
+    "topic": "data_retrieval_filtering",
+    "priority": 140,
+    "role": "support",
+"data": """
+SUPPORT.RULE.data_retrieval_no_loops | doc_type=RULE | role=support | priority=140
+Signature: RETRIEVAL_NO_LOOPS; READ_ONLY; NO_CONDITIONS_NO_LOOPS
+
+Purpose:
+When the user only wants to retrieve/list/filter/project data, do NOT use loops or conditions.
+
+Rules:
+- Do NOT include ## Loops
+- Do NOT include ## Conditions
+- Use ONLY EVNT_RCRD_INFO / EVNT_FLTR / EVNT_JMES in ## Steps
+- Do NOT use EVNT_RCRD_ADD/UPDT/DEL/REST/DUP for read-only requests
+
+ref:data_retrieval_no_loops#support
+"""
+,
+    "text": """
+RETRIEVAL-ONLY: NO LOOPS / NO CONDITIONS
+
+If the user is only retrieving or filtering data:
+- Never add ## Loops or ## Conditions.
+- Steps should include only EVNT_RCRD_INFO / EVNT_FLTR / EVNT_JMES.
+- Do not add any EVNT_RCRD_* action events.
 """
 }
 
 PROMPT_USER_MGMT_ROUTER = {
   "doc_type": "RULE",
   "topic": "user_mgmt",
-  "priority": 135,
+  "priority": 150,
   "role": "router",
   "data": """
-ROUTER.RULE.user_mgmt | doc_type=RULE | role=router | priority=135
+ROUTER.RULE.user_mgmt | doc_type=RULE | role=router | priority=150
 Signature: USER_ACCOUNT_OBJECT; USER_ACCESS_PERMISSIONS; EVNT_USER_MGMT_*
 
 Select when:
@@ -1711,6 +1831,8 @@ USER MANAGEMENT EXAMPLES:
 - "create a user with name :Abishek ,role:System Head, department: IT" → EVNT_USER_MGMT_ADD ONLY
 - "add user with role manager and department IT" → EVNT_USER_MGMT_ADD ONLY
 - "update user details" → EVNT_USER_MGMT_UPDT ONLY
+- "update user email to alice@example.com" → EVNT_USER_MGMT_UPDT ONLY
+- For any "update user ..." request, do NOT use CNDN_*; output a single EVNT_USER_MGMT_UPDT step.
 - "change user role to manager" → EVNT_USER_MGMT_UPDT ONLY
 - "deactivate user" → EVNT_USER_MGMT_DEACT ONLY
 - "activate user" → EVNT_USER_MGMT_DEACT ONLY
@@ -1727,9 +1849,11 @@ USER MANAGEMENT EXAMPLES:
 - "extend user bob to system HR" → EVNT_USER_MGMT_EXTND ONLY
 - "create user in department IT with role manager" → EVNT_USER_MGMT_ADD ONLY
 - "update user john to role admin" → EVNT_USER_MGMT_UPDT ONLY
-- "find user with role manager" → EVNT_RCRD_INFO_STC ONLY (retrieve uses static info)
-- "get user permissions for user john" → EVNT_RCRD_INFO_STC ONLY
-- "retrieve user from department IT" → EVNT_RCRD_INFO_STC ONLY
+- "find user with role manager" → EVNT_USER_MGMT_INFO ONLY
+- "get user permissions for user john" → EVNT_USER_MGMT_INFO ONLY
+- "retrieve user from department IT" → EVNT_USER_MGMT_INFO ONLY
+- "get user info" → EVNT_USER_MGMT_INFO ONLY
+- "show user profile" → EVNT_USER_MGMT_INFO ONLY
 - "Andrew get's added responsibility of head " → EVNT_USER_MGMT_EXTND ONLY
 - "extend Ramesh's responsibility to HR and Finance" → EVNT_USER_MGMT_EXTND ONLY
 - "assign additional duties to Priya in Marketing" → EVNT_USER_MGMT_EXTND ONLY
@@ -1790,6 +1914,7 @@ STATIC RECORD EXAMPLES:
 - "update record where department is Science" → EVNT_RCRD_UPDT_STC ONLY
 - "delete a record where role is Teacher" → EVNT_RCRD_DEL_STC ONLY
 - "restore a record where department is management" → EVNT_RCRD_REST_STC ONLY
+- "duplicate the record where department is management" → EVNT_RCRD_DUP_STC ONLY
 - "add new department science" → EVNT_RCRD_ADD_STC ONLY
 - "find role manager" → EVNT_RCRD_INFO_STC ONLY
 - "change role to manager" → EVNT_RCRD_UPDT_STC ONLY
@@ -1850,6 +1975,31 @@ ref:conditions#router_strong
   + PROMPT_COND_OVERVIEW_AND_PATTERNS["text"]  # <— reuse existing full rules
 }
 
+PROMPT_LOOPS_NO_INFERENCE = {
+  "doc_type": "RULE",
+  "topic": "loops",
+  "priority": 160,
+  "role": "router",
+"data": """
+ROUTER.RULE.loops_no_inference | doc_type=RULE | role=router | priority=160
+Signature: NO_IMPLICIT_LOOPS; REQUIRE_REPETITION_TERMS; WHEN_IF_NOT_LOOP
+
+Purpose:
+Prevent loop selection unless the query explicitly requests repetition.
+
+Rules:
+- Do NOT select loops for queries that only use conditional wording ("when", "if", "whenever") without repetition.
+- Only select loops when explicit repetition is present (e.g., "times", "repeat", "loop", "for each", "for every", "from X to Y", "iterate").
+- Treat "do while" and "at least once" as explicit loop intent (use EVNT_LOOP_DOWHILE).
+
+ref:loops_no_inference#router
+"""
+,
+  "text": "Do NOT use loops unless the user explicitly asks for repetition. "
+  "Words like 'when' or 'if' alone do NOT imply loops. "
+  "Treat 'do while' and 'at least once' as loop intent (EVNT_LOOP_DOWHILE)."
+}
+
 
 
 
@@ -1874,6 +2024,7 @@ LAYER3_DATA_OPS = [
 LAYER3_DATA_RETRIEVAL = [
     PROMPT_DATA_RETRIEVAL_ROUTER,
     PROMPT_DATA_RETRIEVAL_SUPPORT,
+    PROMPT_DATA_RETRIEVAL_NO_LOOPS,
 ]
 
 
@@ -1895,6 +2046,7 @@ LAYER6_NOTIFICATIONS = [
 
 LAYER7_LOOPS = [
     #PROMPT_LOOPS_ROUTER,
+    PROMPT_LOOPS_NO_INFERENCE,
     PROMPT_LOOPS_TYPES,
 ]
 

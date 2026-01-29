@@ -18,8 +18,8 @@ COLLECTION_NAME = os.getenv("CHROMA_COLLECTION", "rag_chunks_v1")
 EMBED_MODEL = os.getenv("OPENAI_EMBEDDING_MODEL", os.getenv("EMBED_MODEL", "text-embedding-3-small"))
 TOP_K = int(os.getenv("QUERY_TOP_K", "8"))
 MAX_BLOCKS = int(os.getenv("SIMPLE_RAG_MAX_BLOCKS", "10"))
-LOOPS_MAX_ABS_GAP = float(os.getenv("SIMPLE_RAG_LOOPS_MAX_ABS_GAP", "0.20"))
-CONDITIONS_MAX_ABS_GAP = float(os.getenv("SIMPLE_RAG_CONDITIONS_MAX_ABS_GAP", "0.20"))
+LOOPS_MAX_ABS_GAP = float(os.getenv("SIMPLE_RAG_LOOPS_MAX_ABS_GAP", "0.02"))
+CONDITIONS_MAX_ABS_GAP = float(os.getenv("SIMPLE_RAG_CONDITIONS_MAX_ABS_GAP", "0.05"))
 CONDITIONS_MIN_GAP_OVER_ACTIONS = float(os.getenv("SIMPLE_RAG_CONDITIONS_MIN_GAP_OVER_ACTIONS", "0.03"))
 ACTIONS_MAX_ABS_GAP = float(os.getenv("SIMPLE_RAG_ACTIONS_MAX_ABS_GAP", "0.05"))
 STATIC_MAX_ABS_GAP = float(os.getenv("SIMPLE_RAG_STATIC_MAX_ABS_GAP", "0.05"))
@@ -254,15 +254,19 @@ The router selected the "loops" topic, so repetition is REQUIRED.
 
 You MUST:
 1) Include a ## Loops section.
+   - If ## Loops is missing, the output is invalid.
 2) Express the repetition count explicitly:
    - If the query says "N times" or "repeat N", the loop MUST include count: N.
 3) Format inside ## Loops with NO numbered lines:
    - Use ONLY bullet format:
      - EVNT_LOOP_FOR (count: N)
        ↳ INSIDE LOOP: <EVNT_* ...>
-4) DO NOT repeat the looped action in ## Steps.
-5) If there are no top-level steps outside loops, OMIT the ## Steps section entirely.
-6) Do NOT add "Loop End" or any loop closing step.
+4) NEVER place EVNT_LOOP_* or INSIDE LOOP lines inside ## Steps.
+   - If any EVNT_LOOP_* appears outside ## Loops, the output is invalid.
+5) DO NOT repeat the looped action in ## Steps.
+6) If there are no top-level steps outside loops, OMIT the ## Steps section entirely.
+7) Do NOT add "Loop End" or any loop closing step.
+8) Output must contain exactly one ## Loops section.
 
 If you violate any rule above, your output is invalid.
 """
@@ -396,8 +400,13 @@ def build_prompt(user_query: str, top_k: int = TOP_K) -> str:
 
     if notification_only:
         parts.append("META.NOTIFICATION_ONLY\n- Only EVNT_NOTI_* steps are allowed. Do NOT add EVNT_RCRD_* or EVNT_FLTR_*.\n")
+        # Notification-only requests should not trigger conditions enforcement.
+        conditions_triggered = False
+        # If notification-only without explicit branching, avoid conditions enforcement.
     if static_required:
         parts.append("META.STATIC_ONLY\n- Use ONLY _STC events for static dimensions (roles/departments). Do NOT use dynamic EVNT_RCRD_*.\n")
+        # Static-only requests should not trigger conditions enforcement.
+        conditions_triggered = False
 
     # Loop-only guard: if query implies a loop, avoid conditions enforcement
     ql = user_query.lower()
@@ -410,16 +419,16 @@ def build_prompt(user_query: str, top_k: int = TOP_K) -> str:
     final_prompt = "\n\n---\n\n".join([p for p in parts if p])
 
     # Add enforcement blocks when retrieved topics indicate conditions/loops
-    if conditions_triggered:
-        final_prompt = _append_conditions_enforcement(final_prompt)
+    # Put loop enforcement at the top of the prompt for higher salience.
     if loops_triggered:
         loops_blocks = _loops_blocks()
         if loops_blocks:
-            # Append loop-related chunks before enforcement, deduped vs prompt
             extra = "\n\n---\n\n".join([b.get("text", "").strip() for b in loops_blocks if b.get("text")])
             if extra:
-                final_prompt = final_prompt + "\n\n---\n\n" + extra
-        final_prompt = _append_loops_enforcement(final_prompt)
+                final_prompt = extra + "\n\n---\n\n" + final_prompt
+        final_prompt = _append_loops_enforcement(final_prompt) + "\n\n---\n\n" + final_prompt
+    if conditions_triggered:
+        final_prompt = _append_conditions_enforcement(final_prompt)
 
     return final_prompt
 
